@@ -1,1 +1,1 @@
-console.log("Backend server starting...");
+console.log("Backend starting...");
