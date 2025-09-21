@@ -1,3 +1,4 @@
+
 from fastapi import FastAPI, Depends
 from sqlalchemy.orm import Session
 from database import SessionLocal
@@ -27,3 +28,8 @@ def get_all_students(db: Session = Depends(get_db)):
 @app.post("/students", response_model=schemas.StudentOut)
 def create_student(student: schemas.StudentCreate, db: Session = Depends(get_db)):
     return crud.create_student(db, student)
+
+
+
+
+
