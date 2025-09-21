@@ -6,10 +6,18 @@ from sqlalchemy.orm import relationship
 from database import Base
 from datetime import datetime
 
-
 # --------------------
 # Student & Class
 # --------------------
+class Class(Base):
+    __tablename__ = "classes"
+
+    class_id = Column(Integer, primary_key=True, autoincrement=True)
+    class_name = Column(String(35), nullable=False)
+
+    students = relationship("Student", back_populates="class_")
+    subjects = relationship("Subject", back_populates="class_")
+
 class Student(Base):
     __tablename__ = "students"
 
@@ -17,23 +25,14 @@ class Student(Base):
     name = Column(String(35), nullable=False)
     email = Column(String(40), nullable=False, unique=True)
     password_hash = Column(String(255), nullable=False)
+    class_id = Column(Integer, ForeignKey("classes.class_id"))
 
-    classes = relationship("Class", back_populates="student")
+    class_ = relationship("Class", back_populates="students")
     doubts = relationship("Doubt", back_populates="student")
     quizzes = relationship("Quiz", back_populates="student")
     progress = relationship("Progress", back_populates="student")
 
-
-class Class(Base):
-    __tablename__ = "classes"
-
-    class_id = Column(Integer, primary_key=True, autoincrement=True)
-    class_name = Column(String(35), nullable=False)
-    student_id = Column(Integer, ForeignKey("students.student_id"))
-
-    student = relationship("Student", back_populates="classes")
-    subjects = relationship("Subject", back_populates="class_")
-
+# ...rest of your models remain unchanged...
 
 # --------------------
 # Subject & Chapter
@@ -142,7 +141,7 @@ class Ncert(Base):
 
     ncert_id = Column(Integer, primary_key=True, autoincrement=True)
     ncert_text = Column(Text, nullable=False)  # LONGTEXT in MySQL
-
+    text_name = Column(String(80), nullable=False)
 
 # --------------------
 # Quizzes, Questions, Options, Answers
