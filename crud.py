@@ -9,7 +9,8 @@ def create_student(db: Session, student_data):
     student = Student(
         name=student_data.name,
         email=student_data.email,
-        password_hash=student_data.password_hash
+        password_hash=student_data.password_hash,
+        class_id=student_data.class_id  # <-- ADD THIS
     )
     db.add(student)
     db.commit()

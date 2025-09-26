@@ -25,7 +25,7 @@ class Student(Base):
     name = Column(String(35), nullable=False)
     email = Column(String(40), nullable=False, unique=True)
     password_hash = Column(String(255), nullable=False)
-    class_id = Column(Integer, ForeignKey("classes.class_id"))
+    class_id = Column(Integer, ForeignKey("classes.class_id"), nullable=True)  # <-- nullable
 
     class_ = relationship("Class", back_populates="students")
     doubts = relationship("Doubt", back_populates="student")

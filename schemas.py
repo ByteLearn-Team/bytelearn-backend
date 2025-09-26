@@ -1,17 +1,18 @@
 from pydantic import BaseModel
+from typing import Optional
 
 # --- Student ---
 class StudentCreate(BaseModel):
     name: str
     email: str
     password_hash: str
-    class_id: int
+    class_id: Optional[int] = None  # <-- Make optional
 
 class StudentOut(BaseModel):
     student_id: int
     name: str
     email: str
-    class_id: int
+    class_id: Optional[int] = None  # <-- Make this Optional
 
     class Config:
         from_attributes = True
@@ -28,7 +29,6 @@ class ClassOut(BaseModel):
     class Config:
         from_attributes = True
 
-# ...rest of your schemas remain unchanged...
 # --- Subject ---
 class SubjectCreate(BaseModel):
     subject_id: int
@@ -100,6 +100,7 @@ class ImageOut(BaseModel):
 
     class Config:
         from_attributes = True
+
 # --- NCERT ---
 class NcertCreate(BaseModel):
     ncert_id: int

@@ -1,9 +1,19 @@
-from fastapi import FastAPI, Depends
+from fastapi import FastAPI, Depends, HTTPException
 from sqlalchemy.orm import Session
 from database import SessionLocal
 import crud, schemas
+from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI()
+
+# Add this after app = FastAPI()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # For development only
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # DB dependency
 def get_db():
@@ -26,6 +36,14 @@ def get_all_students(db: Session = Depends(get_db)):
 # POST new student
 @app.post("/students", response_model=schemas.StudentOut)
 def create_student(student: schemas.StudentCreate, db: Session = Depends(get_db)):
+    return crud.create_student(db, student)
+
+@app.post("/register")
+def register(student: schemas.StudentCreate, db: Session = Depends(get_db)):
+    # Check if email already exists
+    existing = db.query(crud.Student).filter_by(email=student.email).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Email already registered")
     return crud.create_student(db, student)
 
 # GET all classes
@@ -97,3 +115,12 @@ def get_all_ncerts(db: Session = Depends(get_db)):
 @app.post("/ncert", response_model=schemas.NcertOut)
 def create_ncert(ncert: schemas.NcertCreate, db: Session = Depends(get_db)):
     return crud.create_ncert(db, ncert)
+
+@app.post("/login")
+def login(data: dict, db: Session = Depends(get_db)):
+    email = data.get("email")
+    password = data.get("password")
+    user = db.query(crud.Student).filter_by(email=email).first()
+    if not user or user.password_hash != password:
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    return {"student_id": user.student_id, "name": user.name, "email": user.email}
