@@ -25,14 +25,35 @@ class Student(Base):
     name = Column(String(35), nullable=False)
     email = Column(String(40), nullable=False, unique=True)
     password_hash = Column(String(255), nullable=False)
-    class_id = Column(Integer, ForeignKey("classes.class_id"), nullable=True)  # <-- nullable
+    class_id = Column(Integer, ForeignKey("classes.class_id"), nullable=True)
+
+    # ADD THESE FIELDS:
+    is_verified = Column(Integer, nullable=False, default=0)
+    otp_hash = Column(String(64), nullable=True)
+    otp_expires_at = Column(DateTime, nullable=True)
+    otp_attempts = Column(Integer, nullable=False, default=0)
+    otp_last_sent_at = Column(DateTime, nullable=True)
 
     class_ = relationship("Class", back_populates="students")
     doubts = relationship("Doubt", back_populates="student")
     quizzes = relationship("Quiz", back_populates="student")
     progress = relationship("Progress", back_populates="student")
 
-# ...rest of your models remain unchanged...
+# --------------------
+# Pending Registrations
+# --------------------
+class PendingRegistration(Base):
+    __tablename__ = "pending_registrations"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(35), nullable=False)
+    email = Column(String(40), nullable=False, unique=True)
+    password_hash = Column(String(255), nullable=False)
+    class_id = Column(Integer, nullable=True)
+    otp_hash = Column(String(64), nullable=True)
+    otp_expires_at = Column(DateTime, nullable=True)
+    otp_attempts = Column(Integer, nullable=False, default=0)
+    otp_last_sent_at = Column(DateTime, nullable=True)
 
 # --------------------
 # Subject & Chapter

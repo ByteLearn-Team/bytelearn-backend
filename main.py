@@ -3,13 +3,20 @@ from sqlalchemy.orm import Session
 from database import SessionLocal
 import crud, schemas
 from fastapi.middleware.cors import CORSMiddleware
+from otp_utils import generate_otp, hash_otp, send_otp_email
+from datetime import datetime, timedelta
+import asyncio
+from sqlalchemy import and_
+from dotenv import load_dotenv
+import models
+load_dotenv()
 
 app = FastAPI()
 
 # Add this after app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # For development only
+    allow_origins=["*"],  # For dev, allow all. For prod, use your frontend URL.
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -39,12 +46,30 @@ def create_student(student: schemas.StudentCreate, db: Session = Depends(get_db)
     return crud.create_student(db, student)
 
 @app.post("/register")
-def register(student: schemas.StudentCreate, db: Session = Depends(get_db)):
-    # Check if email already exists
-    existing = db.query(crud.Student).filter_by(email=student.email).first()
-    if existing:
+async def register(student: schemas.StudentCreate, db: Session = Depends(get_db)):
+    # Check if email already exists in students or pending_registrations
+    if db.query(crud.Student).filter_by(email=student.email).first():
         raise HTTPException(status_code=400, detail="Email already registered")
-    return crud.create_student(db, student)
+    if db.query(models.PendingRegistration).filter_by(email=student.email).first():
+        raise HTTPException(status_code=400, detail="Registration already pending for this email")
+    # Generate OTP
+    otp = generate_otp()
+    otp_hash_val = hash_otp(otp)
+    expires = datetime.utcnow() + timedelta(minutes=10)
+    pending = models.PendingRegistration(
+        name=student.name,
+        email=student.email,
+        password_hash=student.password_hash,
+        class_id=student.class_id,
+        otp_hash=otp_hash_val,
+        otp_expires_at=expires,
+        otp_attempts=0,
+        otp_last_sent_at=datetime.utcnow()
+    )
+    db.add(pending)
+    db.commit()
+    await send_otp_email(student.email, otp)
+    return {"msg": "OTP sent"}
 
 # GET all classes
 @app.get("/classes", response_model=list[schemas.ClassOut])
@@ -124,3 +149,59 @@ def login(data: dict, db: Session = Depends(get_db)):
     if not user or user.password_hash != password:
         raise HTTPException(status_code=401, detail="Invalid credentials")
     return {"student_id": user.student_id, "name": user.name, "email": user.email}
+
+@app.post("/send_otp")
+async def send_otp(data: dict, db: Session = Depends(get_db)):
+    print("SEND_OTP CALLED", data)
+    email = data.get("email")
+    # Try pending_registrations first
+    pending = db.query(models.PendingRegistration).filter_by(email=email).first()
+    if pending:
+        otp = generate_otp()
+        pending.otp_hash = hash_otp(otp)
+        pending.otp_expires_at = datetime.utcnow() + timedelta(minutes=10)
+        pending.otp_attempts = 0
+        pending.otp_last_sent_at = datetime.utcnow()
+        db.commit()
+        await send_otp_email(email, otp)
+        return {"msg": "OTP resent"}
+    # Fallback: allow for students table (for legacy or future use)
+    user = db.query(models.Student).filter_by(email=email).first()
+    if user:
+        otp = generate_otp()
+        user.otp_hash = hash_otp(otp)
+        user.otp_expires_at = datetime.utcnow() + timedelta(minutes=10)
+        user.otp_attempts = 0
+        user.otp_last_sent_at = datetime.utcnow()
+        db.commit()
+        await send_otp_email(email, otp)
+        return {"msg": "OTP resent"}
+    raise HTTPException(status_code=404, detail="User not found")
+
+@app.post("/verify_otp")
+def verify_otp(data: dict, db: Session = Depends(get_db)):
+    email = data.get("email")
+    otp = data.get("otp")
+    pending = db.query(models.PendingRegistration).filter_by(email=email).first()
+    if not pending or not pending.otp_hash or not pending.otp_expires_at:
+        raise HTTPException(status_code=400, detail="OTP not requested")
+    if datetime.utcnow() > pending.otp_expires_at:
+        raise HTTPException(status_code=400, detail="OTP expired")
+    if pending.otp_attempts >= 5:
+        raise HTTPException(status_code=400, detail="Too many attempts")
+    if pending.otp_hash != hash_otp(otp):
+        pending.otp_attempts += 1
+        db.commit()
+        raise HTTPException(status_code=400, detail="Invalid OTP")
+    # Create user in students table
+    student = models.Student(
+        name=pending.name,
+        email=pending.email,
+        password_hash=pending.password_hash,
+        class_id=pending.class_id,
+        is_verified=1
+    )
+    db.add(student)
+    db.delete(pending)
+    db.commit()
+    return {"msg": "OTP verified"}
