@@ -1,4 +1,4 @@
-import random, string, hashlib, aiosmtplib, os
+import random, string, hashlib, os
 from email.message import EmailMessage
 from datetime import datetime, timedelta
 
@@ -9,6 +9,12 @@ def hash_otp(otp):
     return hashlib.sha256(otp.encode()).hexdigest()
 
 async def send_otp_email(to_email, otp):
+    # Lazy import so missing optional dependency doesn't break app import
+    try:
+        import aiosmtplib
+    except ModuleNotFoundError:
+        raise RuntimeError("aiosmtplib is required to send emails. Install with: python -m pip install aiosmtplib")
+
     msg = EmailMessage()
     msg["From"] = os.getenv("SMTP_USER")
     msg["To"] = to_email
@@ -18,7 +24,7 @@ async def send_otp_email(to_email, otp):
     await aiosmtplib.send(
         msg,
         hostname=os.getenv("SMTP_HOST"),
-        port=int(os.getenv("SMTP_PORT")),
+        port=int(os.getenv("SMTP_PORT") or 587),
         username=os.getenv("SMTP_USER"),
         password=os.getenv("SMTP_PASSWORD"),
         start_tls=True,
