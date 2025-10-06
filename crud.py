@@ -1,123 +1,167 @@
+# Import the Session class needed to talk to the database
 from sqlalchemy.orm import Session
-from models import Student, Class, Subject, Chapter, Summary, Flashcard, Image ,Ncert
 
-# --- Students ---
+# Import all the models (these represent our database tables)
+from models import Student, Class, Subject, Chapter, Summary, Flashcard, Image, Ncert
+
+# ============================================================
+# STUDENT CRUD OPERATIONS (Create, Read)
+# ============================================================
+
 def get_students(db: Session):
+    # Returns a list of all Student records in the database
     return db.query(Student).all()
 
 def create_student(db: Session, student_data):
+    # Adds a new student to the database using the info provided
     student = Student(
-        name=student_data.name,
-        email=student_data.email,
-        password_hash=student_data.password_hash,
-        class_id=student_data.class_id  # <-- ADD THIS
+        name=student_data.name,                            # Student's name
+        email=student_data.email,                          # Student's email
+        password_hash=student_data.password_hash,          # Student's hashed password (for safety)
+        class_id=student_data.class_id                     # Student's class (optional)
     )
-    db.add(student)
-    db.commit()
-    db.refresh(student)
-    return student
+    db.add(student)       # Add the new student to the database session
+    db.commit()           # Save the changes to the database
+    db.refresh(student)   # Get the latest info about the student (including assigned ID)
+    return student        # Return the newly created student
 
-# --- Classes ---
+# ============================================================
+# CLASS CRUD OPERATIONS
+# ============================================================
+
 def get_classes(db: Session):
+    # Returns a list of all Class records in the database
     return db.query(Class).all()
 
 def create_class(db: Session, class_data):
+    # Adds a new class to the database with the provided info
     class_ = Class(
-        class_id=class_data.class_id,
-        class_name=class_data.class_name,
-        student_id=class_data.student_id
+        class_id=class_data.class_id,       # Unique ID (optional if set to auto-increment)
+        class_name=class_data.class_name    # Name of the class
+        # Note: You might want to remove student_id if not used in the model!
+        # student_id=class_data.student_id
     )
-    db.add(class_)
-    db.commit()
-    db.refresh(class_)
-    return class_
+    db.add(class_)         # Add the new class to the session
+    db.commit()            # Save changes
+    db.refresh(class_)     # Get latest info
+    return class_          # Return the new class
 
-# --- Subjects ---
+# ============================================================
+# SUBJECT CRUD OPERATIONS
+# ============================================================
+
 def get_subjects(db: Session):
+    # Returns all Subject records in the database
     return db.query(Subject).all()
 
 def create_subject(db: Session, subject_data):
+    # Adds a new subject to the database
     subject = Subject(
-        subject_id=subject_data.subject_id,
-        subject_name=subject_data.subject_name,
-        class_id=subject_data.class_id
+        subject_id=subject_data.subject_id,   # Unique subject ID
+        subject_name=subject_data.subject_name,# Subject name (e.g. Biology, Math)
+        class_id=subject_data.class_id        # Which class is this for?
     )
     db.add(subject)
     db.commit()
     db.refresh(subject)
     return subject
 
-# --- Chapters ---
+# ============================================================
+# CHAPTER CRUD OPERATIONS
+# ============================================================
+
 def get_chapters(db: Session):
+    # Returns all chapters in the database
     return db.query(Chapter).all()
 
 def create_chapter(db: Session, chapter_data):
+    # Adds a new chapter to the database
     chapter = Chapter(
-        chapter_id=chapter_data.chapter_id,
-        chapter_name=chapter_data.chapter_name,
-        subject_id=chapter_data.subject_id
+        chapter_id=chapter_data.chapter_id,     # Unique chapter ID
+        chapter_name=chapter_data.chapter_name, # Chapter name (e.g. 'Nutrition')
+        subject_id=chapter_data.subject_id      # Which subject it belongs to
     )
     db.add(chapter)
     db.commit()
     db.refresh(chapter)
     return chapter
 
-# --- Summaries ---
+# ============================================================
+# SUMMARY CRUD OPERATIONS
+# ============================================================
+
 def get_summaries(db: Session):
+    # Returns all summaries in the database
     return db.query(Summary).all()
 
 def create_summary(db: Session, summary_data):
+    # Adds a new summary/notes to the database
     summary = Summary(
-        summary_id=summary_data.summary_id,
-        summary_data=summary_data.summary_data,
-        chapter_id=summary_data.chapter_id
+        summary_id=summary_data.summary_id,     # Unique summary ID
+        summary_data=summary_data.summary_data, # Actual summary text/content
+        chapter_id=summary_data.chapter_id      # Which chapter it's linked to
     )
     db.add(summary)
     db.commit()
     db.refresh(summary)
     return summary
 
-# --- Flashcards ---
+# ============================================================
+# FLASHCARD CRUD OPERATIONS
+# ============================================================
+
 def get_flashcards(db: Session):
+    # Gets all flashcards from the database
     return db.query(Flashcard).all()
 
 def create_flashcard(db: Session, flashcard_data):
+    # Adds a new flashcard to the database
     flashcard = Flashcard(
-        flashcard_id=flashcard_data.flashcard_id,
-        flashcard_data=flashcard_data.flashcard_data,
-        chapter_id=flashcard_data.chapter_id
+        flashcard_id=flashcard_data.flashcard_id,   # Unique ID for the flashcard
+        flashcard_data=flashcard_data.flashcard_data,# The content/text of the flashcard
+        chapter_id=flashcard_data.chapter_id        # The chapter it's for
     )
     db.add(flashcard)
     db.commit()
     db.refresh(flashcard)
     return flashcard
 
-# --- Images ---
+# ============================================================
+# IMAGE CRUD OPERATIONS (for summaries/questions)
+# ============================================================
+
 def get_images(db: Session):
+    # Gets all images from the database
     return db.query(Image).all()
 
 def create_image(db: Session, image_data):
+    # Adds a new image record to the database
     image = Image(
-        image_id=image_data.image_id,
-        image_url=image_data.image_url,
-        image_topic=image_data.image_topic,
-        summary_id=image_data.summary_id
+        image_id=image_data.image_id,         # Unique ID for the image (if not auto-increment)
+        image_url=image_data.image_url,       # URL/link to the image file
+        image_topic=image_data.image_topic,   # Topic/description
+        summary_id=image_data.summary_id      # Which summary it's linked to
+        # Optionally add: question_id=image_data.question_id
     )
     db.add(image)
     db.commit()
     db.refresh(image)
-    return image    
-from models import Ncert
+    return image
 
-# --- NCERT ---
+# ============================================================
+# NCERT CRUD OPERATIONS (for official textbook text)
+# ============================================================
+
 def get_ncerts(db: Session):
+    # Returns all NCERT text entries from the database
     return db.query(Ncert).all()
 
 def create_ncert(db: Session, ncert_data):
+    # Adds a new piece of official NCERT text to the db
     ncert = Ncert(
-        ncert_id=ncert_data.ncert_id,  # remove if auto-increment
-        ncert_text=ncert_data.ncert_text,
-        text_name=ncert_data.text_name
+        ncert_id=ncert_data.ncert_id,             # Unique ID (can skip if auto-increment)
+        ncert_text=ncert_data.ncert_text,         # The actual NCERT content
+        text_name=ncert_data.text_name            # Name of the chapter/topic
     )
     db.add(ncert)
     db.commit()

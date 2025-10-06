@@ -1,116 +1,138 @@
-from pydantic import BaseModel
-from typing import Optional
+# Imports for data validation and structure
+from pydantic import BaseModel      # Base class for building Python classes that describe data formats ("schemas")
+from typing import Optional         # Lets us say something (like a field) is optional (doesn’t have to be filled)
 
-# --- Student ---
+# ==================================
+# STUDENT SCHEMA
+# ==================================
+
 class StudentCreate(BaseModel):
-    name: str
-    email: str
-    password_hash: str
-    class_id: Optional[int] = None  # <-- Make optional
+    # This is the shape of data we need to create/add a new student (from API or code)
+    name: str                         # Name of the student (text)
+    email: str                        # Email of the student (text)
+    password_hash: str                # Password as a hashed/scrambled string
+    class_id: Optional[int] = None    # Class is optional—might be left out
 
 class StudentOut(BaseModel):
-    student_id: int
-    name: str
-    email: str
-    class_id: Optional[int] = None  # <-- Make this Optional
-
+    # This is the shape of data we send back when showing student info
+    student_id: int                   # The unique ID assigned to the student in the database
+    name: str                         # Name of the student
+    email: str                        # Email of the student
+    class_id: Optional[int] = None    # Class ID (might be missing)
     class Config:
-        from_attributes = True
+        from_attributes = True        # Tells Pydantic to fill this from ORM models automatically
 
-# --- Class ---
+# ==================================
+# CLASS SCHEMA
+# ==================================
+
 class ClassCreate(BaseModel):
-    class_id: int
-    class_name: str
+    # Shape of data needed to create a new class
+    class_id: int                     # Class's unique ID (sometimes set by user, sometimes auto)
+    class_name: str                   # Name of the class
 
 class ClassOut(BaseModel):
-    class_id: int
-    class_name: str
-
+    # Shape of data sent back when showing class info
+    class_id: int                     # Class's unique ID
+    class_name: str                   # Name of the class
     class Config:
-        from_attributes = True
+        from_attributes = True        # Fill fields from ORM models if possible
 
-# --- Subject ---
+# ==================================
+# SUBJECT SCHEMA
+# ==================================
+
 class SubjectCreate(BaseModel):
-    subject_id: int
-    subject_name: str
-    class_id: int
+    subject_id: int                   # Unique ID for the subject
+    subject_name: str                 # Name of the subject
+    class_id: int                     # Class this subject belongs to
 
 class SubjectOut(BaseModel):
-    subject_id: int
-    subject_name: str
-    class_id: int
-
+    subject_id: int                   # Unique ID for the subject
+    subject_name: str                 # Name of the subject
+    class_id: int                     # Class this subject belongs to
     class Config:
-        from_attributes = True
+        from_attributes = True        # Fill from ORM
 
-# --- Chapter ---
+# ==================================
+# CHAPTER SCHEMA
+# ==================================
+
 class ChapterCreate(BaseModel):
-    chapter_id: int
-    chapter_name: str
-    subject_id: int
+    chapter_id: int                   # Unique ID for the chapter
+    chapter_name: str                 # Name/title of the chapter
+    subject_id: int                   # Subject this chapter belongs to
 
 class ChapterOut(BaseModel):
-    chapter_id: int
-    chapter_name: str
-    subject_id: int
-
+    chapter_id: int                   # Unique ID for the chapter
+    chapter_name: str                 # Name/title of the chapter
+    subject_id: int                   # Subject this chapter belongs to
     class Config:
-        from_attributes = True
+        from_attributes = True        # Fill from ORM
 
-# --- Summary ---
+# ==================================
+# SUMMARY SCHEMA
+# ==================================
+
 class SummaryCreate(BaseModel):
-    summary_id: int
-    summary_data: str
-    chapter_id: int
+    summary_id: int                   # Unique ID for the summary
+    summary_data: str                 # The main summary text
+    chapter_id: int                   # Which chapter this summary belongs to
 
 class SummaryOut(BaseModel):
-    summary_id: int
-    summary_data: str
-    chapter_id: int
-
+    summary_id: int                   # Unique ID for the summary
+    summary_data: str                 # The main summary text
+    chapter_id: int                   # Which chapter this summary belongs to
     class Config:
-        from_attributes = True
+        from_attributes = True        # Fill from ORM
 
-# --- Flashcard ---
+# ==================================
+# FLASHCARD SCHEMA
+# ==================================
+
 class FlashcardCreate(BaseModel):
-    flashcard_id: int
-    flashcard_data: str
-    chapter_id: int
+    flashcard_id: int                 # Unique ID for the flashcard
+    flashcard_data: str               # Text content of the flashcard
+    chapter_id: int                   # Chapter this flashcard belongs to
 
 class FlashcardOut(BaseModel):
-    flashcard_id: int
-    flashcard_data: str
-    chapter_id: int
-
+    flashcard_id: int                 # Unique ID for the flashcard
+    flashcard_data: str               # Text content of the flashcard
+    chapter_id: int                   # Chapter this flashcard belongs to
     class Config:
-        from_attributes = True
+        from_attributes = True        # Fill from ORM
 
-# --- Image ---
+# ==================================
+# IMAGE SCHEMA
+# ==================================
+
 class ImageCreate(BaseModel):
-    image_id: int
-    image_url: str
-    image_topic: str
-    summary_id: int
+    image_id: int                     # Unique ID for the image
+    image_url: str                    # URL address of the image
+    image_topic: str                  # Topic or description for the image
+    summary_id: int                   # Which summary this image is attached to
 
 class ImageOut(BaseModel):
-    image_id: int
-    image_url: str
-    image_topic: str
-    summary_id: int
-
+    image_id: int                     # Unique ID for the image
+    image_url: str                    # URL address of the image
+    image_topic: str                  # Topic or description for the image
+    summary_id: int                   # Which summary this image is attached to
     class Config:
-        from_attributes = True
+        from_attributes = True        # Fill from ORM
 
-# --- NCERT ---
+# ==================================
+# NCERT SCHEMA
+# ==================================
+
 class NcertCreate(BaseModel):
-    ncert_id: int
-    ncert_text: str
-    text_name: str
+    ncert_id: int                     # Unique ID for the NCERT text chunk
+    ncert_text: str                   # Actual NCERT textbook content
+    text_name: str                    # Name of the part/chapter
 
 class NcertOut(BaseModel):
-    ncert_id: int
-    ncert_text: str
-    text_name: str
-
+    ncert_id: int                     # Unique ID for the NCERT text chunk
+    ncert_text: str                   # Actual NCERT textbook content
+    text_name: str                    # Name of the part/chapter
     class Config:
-        from_attributes = True
+        from_attributes = True        # Fill from ORM
+
