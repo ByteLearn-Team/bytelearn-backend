@@ -43,9 +43,12 @@ class Student(Base):  # This makes a database table called 'students'
     otp_hash = Column(String(64), nullable=True)  # Stores their OTP as a secure hash (for registration)
     otp_expires_at = Column(DateTime, nullable=True)  # When the OTP will expire
     otp_attempts = Column(Integer, nullable=False, default=0)  # Tracks how many OTP tries they made
-    otp_last_sent_at = Column(DateTime, nullable=True)  # When we last sent an OTP
+    otp_last_sent_at = Column(DateTime, nullable=True)
+    
+    # NEW: store profile picture as base64 or data-URL (nullable)
+    profile_picture = Column(Text, nullable=True)
 
-    class_ = relationship("Class", back_populates="students")  # Lets us easily get the class for this student
+    class_ = relationship("Class", back_populates="students")
     doubts = relationship("Doubt", back_populates="student")  # All questions ("doubts") asked by this student
     quizzes = relationship("Quiz", back_populates="student")  # All quizzes this student took
     progress = relationship("Progress", back_populates="student")  # Progress tracking for this student

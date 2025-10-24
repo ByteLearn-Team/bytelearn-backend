@@ -12,6 +12,7 @@ class StudentCreate(BaseModel):
     email: str                        # Email of the student (text)
     password_hash: str                # Password as a hashed/scrambled string
     class_id: Optional[int] = None    # Class is optional—might be left out
+    profile_picture: Optional[str] = None  # optional base64/data-url
 
 class StudentOut(BaseModel):
     # This is the shape of data we send back when showing student info
@@ -19,6 +20,7 @@ class StudentOut(BaseModel):
     name: str                         # Name of the student
     email: str                        # Email of the student
     class_id: Optional[int] = None    # Class ID (might be missing)
+    profile_picture: Optional[str] = None
     class Config:
         from_attributes = True        # Tells Pydantic to fill this from ORM models automatically
 

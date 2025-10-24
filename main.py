@@ -57,17 +57,35 @@ def create_student(student: schemas.StudentCreate, db: Session = Depends(get_db)
 # Register new student; send OTP for verification
 @app.post("/register")
 async def register(student: schemas.StudentCreate, db: Session = Depends(get_db)):
-    # Check if this email is already in the students table
+    """
+    Register a user: if email already fully registered -> error.
+    If a pending registration for this email exists -> resend new OTP and update pending record.
+    Otherwise create a new pending registration and send OTP.
+    """
+    # If already a real student, reject
     if db.query(crud.Student).filter_by(email=student.email).first():
         raise HTTPException(status_code=400, detail="Email already registered")
-    # Also check if in pending registrations (waiting for OTP)
-    if db.query(models.PendingRegistration).filter_by(email=student.email).first():
-        raise HTTPException(status_code=400, detail="Registration already pending for this email")
-    # Generate and prepare OTP for this registration
+
+    # If there's already a pending registration, update its OTP and resend
+    pending = db.query(models.PendingRegistration).filter_by(email=student.email).first()
     otp = generate_otp()
     otp_hash_val = hash_otp(otp)
     expires = datetime.utcnow() + timedelta(minutes=10)
-    # Make a new pending registration record
+
+    if pending:
+        pending.otp_hash = otp_hash_val
+        pending.otp_expires_at = expires
+        pending.otp_attempts = 0
+        pending.otp_last_sent_at = datetime.utcnow()
+        # update other fields if provided (name/password/class) so user can re-send corrected info
+        pending.name = student.name or pending.name
+        pending.password_hash = student.password_hash or pending.password_hash
+        pending.class_id = student.class_id if student.class_id is not None else pending.class_id
+        db.commit()
+        await send_otp_email(student.email, otp)
+        return {"msg": "OTP resent"}
+
+    # No pending registration exists — create one
     pending = models.PendingRegistration(
         name=student.name,
         email=student.email,
@@ -78,9 +96,9 @@ async def register(student: schemas.StudentCreate, db: Session = Depends(get_db)
         otp_attempts=0,
         otp_last_sent_at=datetime.utcnow()
     )
-    db.add(pending)         # Add to database
-    db.commit()             # Save changes
-    await send_otp_email(student.email, otp)     # Actually send the email with OTP
+    db.add(pending)
+    db.commit()
+    await send_otp_email(student.email, otp)
     return {"msg": "OTP sent"}
 
 # Get all classes from the database
@@ -385,3 +403,30 @@ def reset_password(data: dict, db: Session = Depends(get_db)):
     db.commit()
     
     return {"msg": "Password reset successful"}
+
+@app.put("/students/{student_id}")
+def update_student(student_id: int, data: dict, db: Session = Depends(get_db)):
+    user = db.query(models.Student).filter_by(student_id=student_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Student not found")
+    if "name" in data and data["name"]:
+        user.name = data["name"].strip()
+    if "profile_picture" in data:
+        pic = data["profile_picture"]
+        if pic is None:
+            user.profile_picture = None
+        else:
+            # reject overly large base64 payloads (approx 2MB limit)
+            max_chars = 2 * 1024 * 1024
+            if len(pic) > max_chars:
+                raise HTTPException(status_code=400, detail="Profile image too large (max 2MB).")
+            user.profile_picture = pic
+    db.commit()
+    db.refresh(user)
+    return {
+        "msg": "Profile updated successfully",
+        "student_id": user.student_id,
+        "name": user.name,
+        "email": user.email,
+        "profile_picture": user.profile_picture
+    }

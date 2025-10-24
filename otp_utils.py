@@ -18,26 +18,61 @@ def hash_otp(otp):
 # Function to send an OTP code to a user’s email address
 # (it runs asynchronously so it doesn’t freeze your app while sending)
 async def send_otp_email(to_email, otp):
-    # Try to import the email sending library (aiosmtplib)
+    """
+    Send OTP via SMTP when configured.
+    If SMTP settings are missing or sending fails, fallback to console + log file.
+    """
+    smtp_host = os.getenv("SMTP_HOST")
+    smtp_port = int(os.getenv("SMTP_PORT") or 587)
+    smtp_user = os.getenv("SMTP_USER")
+    smtp_password = os.getenv("SMTP_PASSWORD")
+
+    # Build simple message
+    msg = EmailMessage()
+    msg["From"] = smtp_user or "no-reply@bytlearn.local"
+    msg["To"] = to_email
+    msg["Subject"] = "Your ByteLearn OTP Code"
+    msg.set_content(f"Your OTP code is: {otp}\nIt is valid for 10 minutes.")
+
+    # If SMTP not configured, fallback to console + file log
+    if not (smtp_host and smtp_user and smtp_password):
+        print(f"[OTP FALLBACK] To: {to_email} OTP: {otp}")
+        try:
+            with open("otp_fallback.log", "a", encoding="utf-8") as f:
+                f.write(f"{datetime.utcnow().isoformat()} | {to_email} | {otp}\n")
+        except Exception:
+            pass
+        return
+
+    # Try sending via aiosmtplib, but catch errors and fallback
     try:
         import aiosmtplib
     except ModuleNotFoundError:
-        # If it's missing, show this message so the developer knows what to do
-        raise RuntimeError("aiosmtplib is required to send emails. Install with: python -m pip install aiosmtplib")
+        print("[OTP] aiosmtplib not installed — OTP will be logged to console")
+        print(f"[OTP FALLBACK] To: {to_email} OTP: {otp}")
+        try:
+            with open("otp_fallback.log", "a", encoding="utf-8") as f:
+                f.write(f"{datetime.utcnow().isoformat()} | {to_email} | {otp}\n")
+        except Exception:
+            pass
+        return
 
-    # Build the actual email message
-    msg = EmailMessage()
-    msg["From"] = os.getenv("SMTP_USER")                   # Who is sending the email (from env variable)
-    msg["To"] = to_email                                   # Who should get the email (the student's address)
-    msg["Subject"] = "Your ByteLearn OTP Code"             # The subject line for the email
-    msg.set_content(f"Your OTP code is: {otp}\nIt is valid for 10 minutes.")  # Main content of the email
-
-    # Actually send the email with the OTP, using secure settings from the .env file
-    await aiosmtplib.send(
-        msg,
-        hostname=os.getenv("SMTP_HOST"),                   # Email server address
-        port=int(os.getenv("SMTP_PORT") or 587),           # Email server port
-        username=os.getenv("SMTP_USER"),                   # Sender account for email server
-        password=os.getenv("SMTP_PASSWORD"),               # Password for email server
-        start_tls=True,                                    # Encrypt the email connection for safety
-    )
+    try:
+        await aiosmtplib.send(
+            msg,
+            hostname=smtp_host,
+            port=smtp_port,
+            username=smtp_user,
+            password=smtp_password,
+            start_tls=True,
+        )
+        print(f"[OTP SENT] to {to_email}")
+    except Exception as e:
+        # connection / auth / network error — fallback to console + log
+        print(f"[OTP ERROR] sending to {to_email}: {e}. Falling back to console log.")
+        try:
+            with open("otp_fallback.log", "a", encoding="utf-8") as f:
+                f.write(f"{datetime.utcnow().isoformat()} | {to_email} | {otp} | ERROR: {e}\n")
+        except Exception:
+            pass
+        print(f"[OTP FALLBACK] To: {to_email} OTP: {otp}")
