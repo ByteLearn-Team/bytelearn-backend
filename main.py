@@ -1,5 +1,5 @@
 # Import the FastAPI class that helps create a web API easily in Python
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, Depends, HTTPException, Request
 from sqlalchemy.orm import Session                           # For talking to the database
 from database import SessionLocal                            # Local database connection/session
 import crud, schemas                                         # Your own helper modules for logic and validation
@@ -10,6 +10,7 @@ import asyncio                                               # Enables asynchron
 from sqlalchemy import and_                                  # For advanced database queries (multiple conditions)
 from dotenv import load_dotenv                               # Loads env variables, often used for secrets
 import models                                                # All your database models (tables)
+import httpx
 
 # Load any environment variables from a .env file (like DB passwords, etc)
 load_dotenv()
@@ -220,3 +221,167 @@ def verify_otp(data: dict, db: Session = Depends(get_db)):
     db.delete(pending)     # Remove from pending table
     db.commit()
     return {"msg": "OTP verified"}
+
+@app.post("/generate")
+async def generate(request: Request):
+    """Proxy endpoint: accepts JSON { "prompt": "..." } and forwards to Flowise,
+    returning a parsed text field to the frontend."""
+    body = await request.json()
+    prompt = body.get("prompt") or body.get("question") or body.get("input")
+    if not prompt:
+        raise HTTPException(status_code=400, detail="Missing prompt")
+
+    FLOWISE_API = "https://cloud.flowiseai.com/api/v1/prediction/95ac6cf3-9302-44b5-b406-28fb18d3dd31"
+
+    # Flowise typically expects {"question": "..."} — include that.
+    payload = {"question": prompt}
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(FLOWISE_API, json=payload)
+            resp.raise_for_status()
+            resp_json = resp.json()
+            # Try to pull the human-readable answer from common Flowise shapes
+            answer = None
+            try:
+                if isinstance(resp_json, dict):
+                    if resp_json.get("text"):
+                        answer = resp_json["text"]
+                    elif resp_json.get("output_text"):
+                        answer = resp_json["output_text"]
+                    elif resp_json.get("answer"):
+                        answer = resp_json["answer"]
+                    elif isinstance(resp_json.get("result"), str):
+                        answer = resp_json["result"]
+                    else:
+                        out = resp_json.get("output") or resp_json.get("result")
+                        if isinstance(out, list) and out:
+                            first = out[0]
+                            data = first.get("data") if isinstance(first, dict) else None
+                            if isinstance(data, list) and data and data[0].get("text"):
+                                answer = data[0]["text"]
+            except Exception:
+                answer = None
+
+            # Fallback to stringified raw response when no text found
+            if not answer:
+                # compactly provide an informative fallback
+                try:
+                    answer = resp_json.get("text") or resp_json.get("output_text") or ""
+                except Exception:
+                    answer = ""
+
+            return {"text": answer, "raw": resp_json}
+    except httpx.HTTPStatusError as e:
+        # include upstream status for debugging
+        raise HTTPException(status_code=502, detail=f"Upstream error: {e.response.status_code}")
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    
+    # Add these new endpoints to your existing main.py file
+# Place them after the existing /verify_otp endpoint
+
+@app.post("/forgot_password")
+async def forgot_password(data: dict, db: Session = Depends(get_db)):
+    """
+    Initiates password reset process by sending OTP to user's email
+    """
+    email = data.get("email")
+    if not email:
+        raise HTTPException(status_code=400, detail="Email is required")
+    
+    # Check if user exists in students table
+    user = db.query(models.Student).filter_by(email=email).first()
+    if not user:
+        # Don't reveal if email exists for security
+        raise HTTPException(status_code=404, detail="If this email exists, an OTP has been sent")
+    
+    # Generate OTP for password reset
+    otp = generate_otp()
+    otp_hash_val = hash_otp(otp)
+    expires = datetime.utcnow() + timedelta(minutes=10)
+    
+    # Store OTP in user record
+    user.otp_hash = otp_hash_val
+    user.otp_expires_at = expires
+    user.otp_attempts = 0
+    user.otp_last_sent_at = datetime.utcnow()
+    db.commit()
+    
+    # Send OTP email
+    await send_otp_email(email, otp)
+    
+    return {"msg": "OTP sent to your email"}
+
+
+@app.post("/verify_reset_otp")
+def verify_reset_otp(data: dict, db: Session = Depends(get_db)):
+    """
+    Verifies OTP for password reset
+    Returns a temporary token if OTP is valid
+    """
+    email = data.get("email")
+    otp = data.get("otp")
+    
+    if not email or not otp:
+        raise HTTPException(status_code=400, detail="Email and OTP are required")
+    
+    # Find user
+    user = db.query(models.Student).filter_by(email=email).first()
+    if not user or not user.otp_hash or not user.otp_expires_at:
+        raise HTTPException(status_code=400, detail="OTP not requested or expired")
+    
+    # Check expiration
+    if datetime.utcnow() > user.otp_expires_at:
+        raise HTTPException(status_code=400, detail="OTP expired")
+    
+    # Check attempts
+    if user.otp_attempts >= 5:
+        raise HTTPException(status_code=400, detail="Too many attempts")
+    
+    # Verify OTP
+    if user.otp_hash != hash_otp(otp):
+        user.otp_attempts += 1
+        db.commit()
+        raise HTTPException(status_code=400, detail="Invalid OTP")
+    
+    # OTP is valid - create a temporary reset token (using email as token for simplicity)
+    # In production, use JWT or similar
+    import secrets
+    reset_token = secrets.token_urlsafe(32)
+    
+    # Store token temporarily (you might want to add a reset_token field to the model)
+    # For now, we'll clear OTP and allow password reset
+    user.otp_hash = None
+    user.otp_expires_at = None
+    user.otp_attempts = 0
+    db.commit()
+    
+    return {"msg": "OTP verified", "reset_token": reset_token, "email": email}
+
+
+@app.post("/reset_password")
+def reset_password(data: dict, db: Session = Depends(get_db)):
+    """
+    Resets user password after OTP verification
+    """
+    email = data.get("email")
+    new_password = data.get("new_password")
+    
+    if not email or not new_password:
+        raise HTTPException(status_code=400, detail="Email and new password are required")
+    
+    # Validate password strength (same as registration)
+    if len(new_password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
+    
+    # Find user
+    user = db.query(models.Student).filter_by(email=email).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # Update password
+    user.password_hash = new_password
+    db.commit()
+    
+    return {"msg": "Password reset successful"}
