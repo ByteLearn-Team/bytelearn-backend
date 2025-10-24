@@ -98,7 +98,10 @@ async def register(student: schemas.StudentCreate, db: Session = Depends(get_db)
     )
     db.add(pending)
     db.commit()
-    await send_otp_email(student.email, otp)
+    
+    # UPDATED: Pass the db session and the user's name from the form
+    await send_otp_email(student.email, otp, db=db, name=student.name)
+    
     return {"msg": "OTP sent"}
 
 # Get all classes from the database
@@ -325,13 +328,13 @@ async def forgot_password(data: dict, db: Session = Depends(get_db)):
     user.otp_attempts = 0
     user.otp_last_sent_at = datetime.utcnow()
     db.commit()
-    
-    # Send OTP email
-    await send_otp_email(email, otp)
-    
+
+    # UPDATED: Pass the db session (name will be looked up automatically)
+    await send_otp_email(email, otp, db=db)
+
     return {"msg": "OTP sent to your email"}
 
-
+# Endpoint to verify the OTP provided by the user
 @app.post("/verify_reset_otp")
 def verify_reset_otp(data: dict, db: Session = Depends(get_db)):
     """
@@ -376,7 +379,6 @@ def verify_reset_otp(data: dict, db: Session = Depends(get_db)):
     db.commit()
     
     return {"msg": "OTP verified", "reset_token": reset_token, "email": email}
-
 
 @app.post("/reset_password")
 def reset_password(data: dict, db: Session = Depends(get_db)):

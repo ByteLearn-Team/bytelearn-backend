@@ -5,6 +5,10 @@ import os                        # Used to get secret info from environment vari
 from email.message import EmailMessage    # Tool for building an email message in Python
 from datetime import datetime, timedelta  # For working with dates and times (for OTP expiry)
 
+# NEW: Import database components to allow querying
+from sqlalchemy.orm import Session
+import models
+
 # Function to generate a random OTP code (like '123456')
 def generate_otp(length=6):
     # Picks random digits (0-9) of a given length and makes them into a string
@@ -16,8 +20,8 @@ def hash_otp(otp):
     return hashlib.sha256(otp.encode()).hexdigest()
 
 # Function to send an OTP code to a user’s email address
-# (it runs asynchronously so it doesn’t freeze your app while sending)
-async def send_otp_email(to_email, otp):
+# UPDATED: Now accepts db session and an optional name
+async def send_otp_email(to_email: str, otp: str, db: Session, name: str | None = None):
     """
     Send OTP via SMTP when configured.
     If SMTP settings are missing or sending fails, fallback to console + log file.
@@ -27,12 +31,30 @@ async def send_otp_email(to_email, otp):
     smtp_user = os.getenv("SMTP_USER")
     smtp_password = os.getenv("SMTP_PASSWORD")
 
+    # --- UPDATED: Logic to find the user's name ---
+    user_name = name  # Use the name if it was passed directly (e.g., from registration form)
+    if not user_name:
+        # If no name was provided, query the database for the user
+        user = db.query(models.Student).filter(models.Student.email == to_email).first()
+        user_name = user.name if user else "User" # Fallback to "User" if not found
+
+    # --- UPDATED: Email body now uses the user's name ---
+    generation_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    email_body = f"""Dear {user_name},
+
+Your one time PIN is: {otp}, and is valid for 10 minutes.
+(Generated at {generation_time})
+
+********************************
+This is an auto-generated email.  Do not reply to this email.
+"""
+
     # Build simple message
     msg = EmailMessage()
     msg["From"] = smtp_user or "no-reply@bytlearn.local"
     msg["To"] = to_email
-    msg["Subject"] = "Your ByteLearn OTP Code"
-    msg.set_content(f"Your OTP code is: {otp}\nIt is valid for 10 minutes.")
+    msg["Subject"] = "Your ByteLearn One Time PIN"
+    msg.set_content(email_body)
 
     # If SMTP not configured, fallback to console + file log
     if not (smtp_host and smtp_user and smtp_password):
