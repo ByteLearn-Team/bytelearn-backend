@@ -112,13 +112,15 @@ class ImageCreate(BaseModel):
     image_id: int                     # Unique ID for the image
     image_url: str                    # URL address of the image
     image_topic: str                  # Topic or description for the image
-    summary_id: int                   # Which summary this image is attached to
+    summary_id: Optional[int] = None
+    question_id: Optional[int] = None
 
 class ImageOut(BaseModel):
     image_id: int                     # Unique ID for the image
     image_url: str                    # URL address of the image
     image_topic: str                  # Topic or description for the image
-    summary_id: int                   # Which summary this image is attached to
+    summary_id: Optional[int] = None
+    question_id: Optional[int] = None
     class Config:
         from_attributes = True        # Fill from ORM
 
@@ -126,15 +128,21 @@ class ImageOut(BaseModel):
 # NCERT SCHEMA
 # ==================================
 
-class NcertCreate(BaseModel):
-    ncert_id: int                     # Unique ID for the NCERT text chunk
-    ncert_text: str                   # Actual NCERT textbook content
-    text_name: str                    # Name of the part/chapter
+class NcertBase(BaseModel):
+    ncert_text: Optional[str] = None
+    text_name: Optional[str] = None
+    chapter_id: Optional[int] = None
 
-class NcertOut(BaseModel):
-    ncert_id: int                     # Unique ID for the NCERT text chunk
-    ncert_text: str                   # Actual NCERT textbook content
-    text_name: str                    # Name of the part/chapter
+class NcertCreate(NcertBase):
+    pass
+
+class NcertOut(NcertBase):
+    ncert_id: int
+
     class Config:
-        from_attributes = True        # Fill from ORM
+        from_attributes = True
+
+# ==================================
+# DOUBT SCHEMA
+# ==================================
 

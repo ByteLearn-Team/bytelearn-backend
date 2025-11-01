@@ -134,18 +134,17 @@ class Flashcard(Base):  # Stores simple facts or Q&A for revision
 # Image Table
 # =======================
 
-class Image(Base):  # Stores images for summaries or quiz questions
+class Image(Base):
     __tablename__ = "images"
+    image_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    image_url = Column(String(255))
+    image_topic = Column(String(255))
+    summary_id = Column(Integer, ForeignKey("summaries.summary_id"), nullable=True)
+    question_id = Column(Integer, ForeignKey("quiz_items.question_id"), nullable=True)
 
-    image_id = Column(Integer, primary_key=True, autoincrement=True)
-    image_url = Column(String(255), nullable=False)  # Link to the image file
-    image_topic = Column(String(255), nullable=False)  # What is this image about?
-    
-    summary_id = Column(Integer, ForeignKey("summaries.summary_id"))  # Link to summary (optional)
-    question_id = Column(Integer, ForeignKey("quiz_items.question_id"))  # Link to quiz question (optional)
-    
     summary = relationship("Summary", back_populates="images")
     question = relationship("QuizItem", back_populates="images")
+
 
 # =======================
 # Doubt Table (Student Questions)
@@ -183,12 +182,15 @@ class Response(Base):  # Stores answers to student doubts
 # NCERT Table (Official Text)
 # =======================
 
-class Ncert(Base):  # Stores official exam text from NCERT books
+class Ncert(Base):
     __tablename__ = "ncert"
+    ncert_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    ncert_text = Column(Text)
+    text_name = Column(String(80))
+    chapter_id = Column(Integer, ForeignKey("chapters.chapter_id"))
 
-    ncert_id = Column(Integer, primary_key=True, autoincrement=True)
-    ncert_text = Column(Text, nullable=False)  # The textbook content itself
-    text_name = Column(String(80), nullable=False)  # What chapter/part/theme is this text from?
+    chapter = relationship("Chapter")
+
 
 # =======================
 # Quiz Table

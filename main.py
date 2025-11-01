@@ -1,28 +1,24 @@
-# Import the FastAPI class that helps create a web API easily in Python
 from fastapi import FastAPI, Depends, HTTPException, Request, BackgroundTasks
-from sqlalchemy.orm import Session                           # For talking to the database
-from database import SessionLocal                            # Local database connection/session
-import crud, schemas                                         # Your own helper modules for logic and validation
-from fastapi.middleware.cors import CORSMiddleware           # To allow the frontend and backend to talk to each other
-from otp_utils import generate_otp, hash_otp, send_otp_email # Functions for handling OTP (one-time password)
-from datetime import datetime, timedelta                     # For working with date and time objects
-import asyncio                                               # Enables asynchronous operations (like sending emails)
-from sqlalchemy import and_                                  # For advanced database queries (multiple conditions)
-from dotenv import load_dotenv                               # Loads env variables, often used for secrets
-import models                                                # All your database models (tables)
-import httpx
+from sqlalchemy.orm import Session
+from database import SessionLocal
+from fastapi.middleware.cors import CORSMiddleware
+from otp_utils import generate_otp, hash_otp, send_otp_email
+from datetime import datetime, timedelta
 import os
+from sqlalchemy import and_
+from dotenv import load_dotenv
+import models, schemas, crud
 import re
 import random
 from sqlalchemy import or_
+import httpx
+from sqlalchemy import func, desc
+from typing import List, Dict, Any
 
-# Load any environment variables from a .env file (like DB passwords, etc)
 load_dotenv()
 
-# Make a FastAPI application object called 'app'
 app = FastAPI()
 
-# Add CORS middleware, which allows other websites (like your frontend) to access this backend
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -31,51 +27,30 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# -- include quiz router --
-#from routers.quiz_router import router as quiz_router
-#app.include_router(quiz_router)
-# router is defined later in this file; registration moved to after its definition
-
-# Create a dependency function to get the database for each API call
 def get_db():
-    db = SessionLocal()               # Makes a new database session for this API request
+    db = SessionLocal()
     try:
-        yield db                      # Provide the db to whatever needs it
+        yield db
     finally:
-        db.close()                    # Finally, close the db connection (avoids leaks)
+        db.close()
 
-# ==========================
-# Routes (API Endpoints)
-# ==========================
-
-# The root URL ("/") shows a welcome message
 @app.get("/")
 def home():
-    return {"msg": "ByteLearn backend connected to Aiven ✅"}
+    return {"msg": "BytLearn backend connected to Aiven ✅"}
 
-# Get all students from the database
 @app.get("/students", response_model=list[schemas.StudentOut])
 def get_all_students(db: Session = Depends(get_db)):
     return crud.get_students(db)
 
-# Add a new student to the database
 @app.post("/students", response_model=schemas.StudentOut)
 def create_student(student: schemas.StudentCreate, db: Session = Depends(get_db)):
     return crud.create_student(db, student)
 
-# Register new student; send OTP for verification
 @app.post("/register")
 async def register(student: schemas.StudentCreate, db: Session = Depends(get_db)):
-    """
-    Register a user: if email already fully registered -> error.
-    If a pending registration for this email exists -> resend new OTP and update pending record.
-    Otherwise create a new pending registration and send OTP.
-    """
-    # If already a real student, reject
     if db.query(crud.Student).filter_by(email=student.email).first():
         raise HTTPException(status_code=400, detail="Email already registered")
 
-    # If there's already a pending registration, update its OTP and resend
     pending = db.query(models.PendingRegistration).filter_by(email=student.email).first()
     otp = generate_otp()
     otp_hash_val = hash_otp(otp)
@@ -86,15 +61,13 @@ async def register(student: schemas.StudentCreate, db: Session = Depends(get_db)
         pending.otp_expires_at = expires
         pending.otp_attempts = 0
         pending.otp_last_sent_at = datetime.utcnow()
-        # update other fields if provided (name/password/class) so user can re-send corrected info
         pending.name = student.name or pending.name
         pending.password_hash = student.password_hash or pending.password_hash
         pending.class_id = student.class_id if student.class_id is not None else pending.class_id
         db.commit()
-        await send_otp_email(student.email, otp)
+        await send_otp_email(student.email, otp, db=db, name=student.name)
         return {"msg": "OTP resent"}
 
-    # No pending registration exists — create one
     pending = models.PendingRegistration(
         name=student.name,
         email=student.email,
@@ -108,82 +81,66 @@ async def register(student: schemas.StudentCreate, db: Session = Depends(get_db)
     db.add(pending)
     db.commit()
     
-    # UPDATED: Pass the db session and the user's name from the form
     await send_otp_email(student.email, otp, db=db, name=student.name)
     
     return {"msg": "OTP sent"}
 
-# Get all classes from the database
 @app.get("/classes", response_model=list[schemas.ClassOut])
 def get_all_classes(db: Session = Depends(get_db)):
     return crud.get_classes(db)
 
-# Add a new class
 @app.post("/classes", response_model=schemas.ClassOut)
 def create_class(class_: schemas.ClassCreate, db: Session = Depends(get_db)):
     return crud.create_class(db, class_)
 
-# Get all subjects
 @app.get("/subjects", response_model=list[schemas.SubjectOut])
 def get_all_subjects(db: Session = Depends(get_db)):
     return crud.get_subjects(db)
 
-# Add a new subject
 @app.post("/subjects", response_model=schemas.SubjectOut)
 def create_subject(subject: schemas.SubjectCreate, db: Session = Depends(get_db)):
     return crud.create_subject(db, subject)
 
-# Get all chapters
 @app.get("/chapters", response_model=list[schemas.ChapterOut])
 def get_all_chapters(db: Session = Depends(get_db)):
     return crud.get_chapters(db)
 
-# Add a new chapter
 @app.post("/chapters", response_model=schemas.ChapterOut)
 def create_chapter(chapter: schemas.ChapterCreate, db: Session = Depends(get_db)):
     return crud.create_chapter(db, chapter)
 
-# Get all summaries
 @app.get("/summaries", response_model=list[schemas.SummaryOut])
 def get_all_summaries(db: Session = Depends(get_db)):
     return crud.get_summaries(db)
 
-# Add a new summary
 @app.post("/summaries", response_model=schemas.SummaryOut)
 def create_summary(summary: schemas.SummaryCreate, db: Session = Depends(get_db)):
     return crud.create_summary(db, summary)
 
-# Get all flashcards
 @app.get("/flashcards", response_model=list[schemas.FlashcardOut])
 def get_all_flashcards(db: Session = Depends(get_db)):
     return crud.get_flashcards(db)
 
-# Add a new flashcard
 @app.post("/flashcards", response_model=schemas.FlashcardOut)
 def create_flashcard(flashcard: schemas.FlashcardCreate, db: Session = Depends(get_db)):
     return crud.create_flashcard(db, flashcard)
 
-# Get all images
 @app.get("/images", response_model=list[schemas.ImageOut])
 def get_all_images(db: Session = Depends(get_db)):
     return crud.get_images(db)
 
-# Add a new image
 @app.post("/images", response_model=schemas.ImageOut)
 def create_image(image: schemas.ImageCreate, db: Session = Depends(get_db)):
     return crud.create_image(db, image)
 
-# Get all NCERT entries
 @app.get("/ncert", response_model=list[schemas.NcertOut])
 def get_all_ncerts(db: Session = Depends(get_db)):
     return crud.get_ncerts(db)
 
-# Add a new NCERT entry
 @app.post("/ncert", response_model=schemas.NcertOut)
 def create_ncert(ncert: schemas.NcertCreate, db: Session = Depends(get_db)):
     return crud.create_ncert(db, ncert)
 
-# Basic login function
 @app.post("/login")
 def login(data: dict, db: Session = Depends(get_db)):
     email = data.get("email")
@@ -193,11 +150,9 @@ def login(data: dict, db: Session = Depends(get_db)):
         raise HTTPException(status_code=401, detail="Invalid credentials")
     return {"student_id": user.student_id, "name": user.name, "email": user.email}
 
-# Resend OTP to a user (if needed)
 @app.post("/send_otp")
 async def send_otp(data: dict, db: Session = Depends(get_db)):
     email = data.get("email")
-    # Try pending_registrations table first
     pending = db.query(models.PendingRegistration).filter_by(email=email).first()
     if pending:
         otp = generate_otp()
@@ -206,10 +161,8 @@ async def send_otp(data: dict, db: Session = Depends(get_db)):
         pending.otp_attempts = 0
         pending.otp_last_sent_at = datetime.utcnow()
         db.commit()
-        # PASS db to send_otp_email
         await send_otp_email(email, otp, db=db)
         return {"msg": "OTP resent"}
-    # Try students table (if not found above)
     user = db.query(models.Student).filter_by(email=email).first()
     if user:
         otp = generate_otp()
@@ -218,13 +171,10 @@ async def send_otp(data: dict, db: Session = Depends(get_db)):
         user.otp_attempts = 0
         user.otp_last_sent_at = datetime.utcnow()
         db.commit()
-        # PASS db to send_otp_email
         await send_otp_email(email, otp, db=db)
         return {"msg": "OTP resent"}
-    # If email is not found anywhere, raise an error
     raise HTTPException(status_code=404, detail="User not found")
 
-# Verify that an OTP is correct and activate the user's account
 @app.post("/verify_otp")
 def verify_otp(data: dict, db: Session = Depends(get_db)):
     email = data.get("email")
@@ -241,7 +191,6 @@ def verify_otp(data: dict, db: Session = Depends(get_db)):
         db.commit()
         raise HTTPException(status_code=400, detail="Invalid OTP")
 
-    # If everything is good, make a new real Student
     student = models.Student(
         name=pending.name,
         email=pending.email,
@@ -249,16 +198,16 @@ def verify_otp(data: dict, db: Session = Depends(get_db)):
         class_id=pending.class_id,
         is_verified=1
     )
-    db.add(student)        # Save student to real student table
-    db.delete(pending)     # Remove from pending table
+    db.add(student)
+    db.delete(pending)
     db.commit()
     return {"msg": "OTP verified"}
 
 @app.post("/generate")
 async def generate(request: Request, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     """Accept a student's doubt, persist it immediately, and schedule an asynchronous
-    task to resolve the doubt using NCERT text + Groq (fallback to Flowise).
-    Returns quickly with doubt_id so frontend can poll later if desired."""
+    task to resolve the doubt using NCERT text + Groq.
+    Returns quickly with doubt_id so frontend can poll later."""
     body = await request.json()
     prompt = body.get("prompt") or body.get("question") or body.get("input")
     if not prompt:
@@ -287,7 +236,7 @@ async def generate(request: Request, background_tasks: BackgroundTasks, db: Sess
             pass
         raise HTTPException(status_code=500, detail=f"Could not save doubt: {e}")
 
-    # Background worker: resolve the doubt using NCERT context and Groq (fallback to Flowise)
+    # Background worker: resolve the doubt using NCERT context and Groq
     async def _process_doubt(doubt_id: int, prompt_text: str, student_id, chapter_id):
         # make a new DB session for background work
         db2 = SessionLocal()
@@ -295,63 +244,46 @@ async def generate(request: Request, background_tasks: BackgroundTasks, db: Sess
             # Build NCERT context: prefer rows matching chapter_id, else fuzzy search in text
             q = db2.query(models.Ncert)
             if chapter_id:
-                # Try to map chapter_id -> chapter_name, then search NCERT by name/text
-                try:
-                    chap = db2.query(models.Chapter).filter_by(chapter_id=chapter_id).first()
-                    if chap and chap.chapter_name:
-                        name = chap.chapter_name
-                        q = q.filter(
-                            or_(
-                                models.Ncert.text_name.like(f"%{name}%"),
-                                models.Ncert.ncert_text.like(f"%{name}%")
-                            )
-                        )
-                    else:
-                        # fallback to keyword search below if chapter not found
-                        raise Exception("chapter not found")
-                except Exception:
-                    keywords = re.findall(r"\b[a-zA-Z]{4,}\b", prompt_text)
-                    if keywords:
-                        kw = keywords[:6]
-                        filters = [models.Ncert.ncert_text.like(f"%{k}%") for k in kw]
-                        q = q.filter(or_(*filters))
+                # Directly filter by chapter_id since the column now exists
+                q = q.filter(models.Ncert.chapter_id == chapter_id)
             else:
-                # Search for some overlapping keywords from prompt
+                # Fallback to keyword search if no chapter_id is provided
                 keywords = re.findall(r"\b[a-zA-Z]{4,}\b", prompt_text)
                 if keywords:
                     kw = keywords[:6]
-                    # simple OR search on text_name and ncert_text
                     filters = [models.Ncert.ncert_text.like(f"%{k}%") for k in kw]
                     q = q.filter(or_(*filters))
             rows = q.limit(12).all()
 
             if not rows:
-                # fallback grab some NCERT content
                 rows = db2.query(models.Ncert).limit(20).all()
 
-            context = "\\n\\n".join([r.ncert_text for r in rows if r.ncert_text])
+            context = "\n\n".join([r.ncert_text for r in rows if r.ncert_text])
             if len(context) > 15000:
                 context = context[:15000]
 
-            final_prompt = (
+            system_prompt = (
                 "You are an educational assistant. Use the NCERT context below to answer the student's question. "
-                f"If the context is not relevant, answer based on general knowledge.\n\nCONTEXT:\n{context}\n\nQUESTION:\n{prompt_text}\n\nAnswer concisely."
+                "If the context is not relevant, answer based on general knowledge. Answer concisely."
             )
+            user_prompt = f"CONTEXT:\n{context}\n\nQUESTION:\n{prompt_text}"
 
             # Try Groq if configured
             groq_url = os.getenv("GROQ_API_URL", "https://api.groq.com/openai/v1/chat/completions")
             groq_key = os.getenv("GROQ_API_KEY")
+            print(f"DEBUG: Using Groq Key: {groq_key[:5]}...{groq_key[-4:] if groq_key else 'None'}")
+
             answer_text = None
 
             try:
                 if groq_url and groq_key:
                     headers = {"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"}
-                    async with httpx.AsyncClient(timeout=30.0) as client:
+                    async with httpx.AsyncClient(timeout=60.0) as client:
                         payload = {
-                            "model": "llama3-8b-8192",
+                            "model": "llama-3.3-70b-versatile",
                             "messages": [
-                                {"role": "system", "content": "You are a helpful assistant for students."},
-                                {"role": "user", "content": final_prompt}
+                                {"role": "system", "content": system_prompt},
+                                {"role": "user", "content": user_prompt}
                             ]
                         }
                         resp = await client.post(groq_url, json=payload, headers=headers)
@@ -371,13 +303,19 @@ async def generate(request: Request, background_tasks: BackgroundTasks, db: Sess
                                 if message and isinstance(message, dict) and message.get("content"):
                                     answer = message["content"]
                         if not answer:
-                            answer_text = str(j)
+                            # If parsing fails, don't save the raw JSON. Use a fallback message.
+                            print(f"Could not parse answer from Groq response: {j}")
+                            answer_text = "Sorry, the AI returned an unexpected response format."
                         else:
                             answer_text = str(answer)
 
             except Exception as e:
+                # Add this block to print the detailed error message from Groq's server
+                if isinstance(e, httpx.HTTPStatusError):
+                    print(f"Groq API response error: {e.response.status_code} - {e.response.text}")
+                
                 print(f"Error in background Groq call for doubt {doubt_id}: {e}")
-                answer_text = f"Sorry, there was an error getting an answer from the AI assistant. Please try again later. (Error: {e})"
+                answer_text = f"Sorry, there was an error getting an answer from the AI assistant. Please try again later."
 
             # Persist the response linked to doubt
             try:
@@ -402,80 +340,56 @@ async def generate(request: Request, background_tasks: BackgroundTasks, db: Sess
     background_tasks.add_task(_process_doubt, doubt_id, prompt, student_id, chapter_id)
     return {"doubt_id": doubt_id, "status": "queued"}
     
-    # Add these new endpoints to your existing main.py file
-# Place them after the existing /verify_otp endpoint
-
 @app.post("/forgot_password")
 async def forgot_password(data: dict, db: Session = Depends(get_db)):
-    """
-    Initiates password reset process by sending OTP to user's email
-    """
     email = data.get("email")
     if not email:
         raise HTTPException(status_code=400, detail="Email is required")
     
-    # Check if user exists in students table
     user = db.query(models.Student).filter_by(email=email).first()
     if not user:
-        # Don't reveal if email exists for security
         raise HTTPException(status_code=404, detail="If this email exists, an OTP has been sent")
     
-    # Generate OTP for password reset
     otp = generate_otp()
     otp_hash_val = hash_otp(otp)
     expires = datetime.utcnow() + timedelta(minutes=10)
     
-    # Store OTP in user record
     user.otp_hash = otp_hash_val
     user.otp_expires_at = expires
     user.otp_attempts = 0
     user.otp_last_sent_at = datetime.utcnow()
     db.commit()
 
-    # UPDATED: Pass the db session (name will be looked up automatically)
     await send_otp_email(email, otp, db=db)
 
     return {"msg": "OTP sent to your email"}
 
-# Endpoint to verify the OTP provided by the user
 @app.post("/verify_reset_otp")
 def verify_reset_otp(data: dict, db: Session = Depends(get_db)):
-    """
-    Verifies OTP for password reset
-    Returns a temporary token if OTP is valid
-    """
     email = data.get("email")
     otp = data.get("otp")
     
     if not email or not otp:
         raise HTTPException(status_code=400, detail="Email and OTP are required")
     
-    # Find user
     user = db.query(models.Student).filter_by(email=email).first()
     if not user or not user.otp_hash or not user.otp_expires_at:
         raise HTTPException(status_code=400, detail="OTP not requested or expired")
     
-    # Check expiration
     if datetime.utcnow() > user.otp_expires_at:
         raise HTTPException(status_code=400, detail="OTP expired")
     
-    # Check attempts
     if user.otp_attempts >= 5:
         raise HTTPException(status_code=400, detail="Too many attempts")
     
-    # Verify OTP
     if user.otp_hash != hash_otp(otp):
         user.otp_attempts += 1
         db.commit()
         raise HTTPException(status_code=400, detail="Invalid OTP")
     
-    # OTP is valid - create a temporary reset token (using email as token for simplicity)
-    # In production, use JWT or similar
     import secrets
     reset_token = secrets.token_urlsafe(32)
     
-    # Store token temporarily (you might want to add a reset_token field to the model)
-    # For now, we'll clear OTP and allow password reset
     user.otp_hash = None
     user.otp_expires_at = None
     user.otp_attempts = 0
@@ -485,25 +399,19 @@ def verify_reset_otp(data: dict, db: Session = Depends(get_db)):
 
 @app.post("/reset_password")
 def reset_password(data: dict, db: Session = Depends(get_db)):
-    """
-    Resets user password after OTP verification
-    """
     email = data.get("email")
     new_password = data.get("new_password")
     
     if not email or not new_password:
         raise HTTPException(status_code=400, detail="Email and new password are required")
     
-    # Validate password strength (same as registration)
     if len(new_password) < 8:
         raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
     
-    # Find user
     user = db.query(models.Student).filter_by(email=email).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     
-    # Update password
     user.password_hash = new_password
     db.commit()
     
@@ -521,7 +429,6 @@ def update_student(student_id: int, data: dict, db: Session = Depends(get_db)):
         if pic is None:
             user.profile_picture = None
         else:
-            # reject overly large base64 payloads (approx 2MB limit)
             max_chars = 2 * 1024 * 1024
             if len(pic) > max_chars:
                 raise HTTPException(status_code=400, detail="Profile image too large (max 2MB).")
@@ -538,52 +445,41 @@ def update_student(student_id: int, data: dict, db: Session = Depends(get_db)):
 
 @app.post("/generate_quiz")
 async def generate_quiz(request: Request, db: Session = Depends(get_db)):
-    """
-    Accepts JSON { "topic": "...", "num_questions": 5 }
-    If num_questions <= 0 (or explicitly 0) -> generate maximum possible from NCERT text
-    Returns JSON: { "quiz": [ { question, options: [...], correct_answer: "A", explanation } ] }
-    """
     body = await request.json()
     topic = (body.get("topic") or "").strip()
 
-    # parse requested count; treat 0 or negative as "generate maximum"
     try:
         num_q_raw = body.get("num_questions", None)
         if num_q_raw is None:
-            num_questions = 5
+            num_questions = 10
         else:
             num_questions = int(num_q_raw)
     except Exception:
-        num_questions = 5
+        num_questions = 10
 
     generate_max = False
     if num_questions <= 0:
         generate_max = True
 
     try:
-        # Try to find relevant NCERT rows by topic; fallback to many rows if none found
+        chapterId = body.get("chapter_id")
         q = db.query(models.Ncert)
-        if topic:
-            q = q.filter(
-                or_(
-                    models.Ncert.text_name.like(f"%{topic}%"),
-                    models.Ncert.ncert_text.like(f"%{topic}%")
-                )
-            )
+        if chapterId:
+            # Directly filter by chapter_id since the column now exists
+            q = q.filter(models.Ncert.chapter_id == chapterId)
+
         rows = q.limit(40).all()
         if not rows:
+            # Fallback for when chapter has no direct NCERT mapping or no chapter_id was given
             rows = db.query(models.Ncert).limit(80).all()
 
-        # combine text and split to sentences
         text = " ".join([r.ncert_text for r in rows if r.ncert_text])
         if not text or len(text) < 50:
             return {"quiz": [], "error": "Not enough NCERT content found for the requested topic."}
 
-        # simple sentence split
         sentences = [s.strip() for s in re.split(r'(?<=[.!?])\s+', text) if len(s.strip()) > 30]
         random.shuffle(sentences)
 
-        # build word pool for distractors
         words = re.findall(r"\b[a-zA-Z]{3,}\b", text)
         words = [w for w in set(words) if len(w) >= 4]
         if not words:
@@ -591,12 +487,12 @@ async def generate_quiz(request: Request, db: Session = Depends(get_db)):
 
         quiz = []
         used_questions = set()
+        target_count = num_questions if not generate_max else len(sentences)
+        
         for sent in sentences:
-            # stop only if not generating max and we hit requested count
             if not generate_max and len(quiz) >= num_questions:
                 break
 
-            # pick candidate keyword (longest word in sentence not numeric)
             candidates = re.findall(r"\b[a-zA-Z]{4,}\b", sent)
             candidates = [c for c in candidates if c.lower() not in ("which","that","this","there","their","these","those")]
             if not candidates:
@@ -606,61 +502,35 @@ async def generate_quiz(request: Request, db: Session = Depends(get_db)):
                 continue
             used_questions.add(keyword.lower())
 
-            # form question by replacing first occurrence of keyword with blank
             question_text = re.sub(re.escape(keyword), "____", sent, count=1, flags=re.IGNORECASE)
 
-            # build distractors
             distractors = [w for w in words if w.lower() != keyword.lower()]
             random.shuffle(distractors)
             opts = [keyword] + distractors[:3]
             random.shuffle(opts)
 
-            # format options as "A) ..." to keep frontend compatibility
             formatted_opts = [f"{chr(65+i)}) {opt}" for i, opt in enumerate(opts)]
             correct_index = opts.index(keyword)
             correct_letter = chr(65 + correct_index)
 
-            # simple explanation: include the original sentence as context
             explanation = f"The correct answer is '{keyword}'. Context: {sent}"
 
             quiz.append({
                 "question": question_text,
                 "options": formatted_opts,
-                "correct_answer": correct_letter,   # letter e.g. "A"
+                "correct_answer": correct_letter,
                 "explanation": explanation
             })
 
-        # Return whatever we could build (if generate_max True, we attempted all sentences)
         return {"quiz": quiz, "topic": topic}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-from fastapi import APIRouter, Request, Depends, HTTPException
-from sqlalchemy.orm import Session
-from database import SessionLocal
-from models import Quiz, QuizItem, Option
-from datetime import datetime
-
+from fastapi import APIRouter
 router = APIRouter()
-
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
 
 @router.post("/generate_and_save_quiz")
 async def generate_and_save_quiz(request: Request, db: Session = Depends(get_db)):
-    """
-    Accepts JSON:
-      { "quiz": [ { question, options: [...], correct_answer: "A" | 0 | ... , explanation } ],
-        "chapter_id": int,
-        "student_id": int,
-        "num_questions": int (optional)
-      }
-    Stores Quiz, QuizItem and Option rows and returns quiz_id and items.
-    """
     try:
         body = await request.json()
         chapter_id = body.get("chapter_id")
@@ -670,8 +540,7 @@ async def generate_and_save_quiz(request: Request, db: Session = Depends(get_db)
         if not quiz_questions or not isinstance(quiz_questions, list):
             raise HTTPException(status_code=400, detail="Missing or invalid 'quiz' array")
 
-        # create quiz record
-        quiz = Quiz(
+        quiz = models.Quiz(
             created_at=datetime.utcnow(),
             result_date=datetime.utcnow(),
             attempt_number=1,
@@ -682,23 +551,21 @@ async def generate_and_save_quiz(request: Request, db: Session = Depends(get_db)
             student_id=student_id
         )
         db.add(quiz)
-        db.flush()  # ensure quiz.quiz_id available
+        db.flush()
 
         saved_items = []
         for q in quiz_questions:
-            item = QuizItem(
+            item = models.QuizItem(
                 question=q.get("question", ""),
                 answer_explain=q.get("explanation", ""),
                 quiz_id=quiz.quiz_id
             )
             db.add(item)
-            db.flush()  # ensure item.question_id available
+            db.flush()
 
             opts = q.get("options", []) or []
-            # support correct_answer as letter ("A") or index (0)
             corr = q.get("correct_answer", None)
             for idx, opt_text in enumerate(opts):
-                # determine correctness string for Option.correct column
                 is_correct = False
                 if isinstance(corr, int):
                     is_correct = (idx == corr)
@@ -708,17 +575,14 @@ async def generate_and_save_quiz(request: Request, db: Session = Depends(get_db)
                     except Exception:
                         is_correct = False
                 elif corr is None:
-                    # if no correct provided, assume first option
                     is_correct = (idx == 0)
 
-                # Ensure option text fits DB column (models.Option.opt is String(35))
                 safe_opt = (opt_text or "").strip()
                 if len(safe_opt) > 35:
-                    # Truncate rather than fail the whole request
                     safe_opt = safe_opt[:35]
                 if not safe_opt:
                     safe_opt = "(no text)"
-                option = Option(
+                option = models.Option(
                     opt=safe_opt,
                     correct="True" if is_correct else "False",
                     question_id=item.question_id
@@ -736,9 +600,6 @@ async def generate_and_save_quiz(request: Request, db: Session = Depends(get_db)
         db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
 
-
-# Minimal endpoint to update only the score column of an existing quiz row.
-# Expects JSON: { "quiz_id": int, "score": number }
 @router.post("/update_quiz_score")
 async def update_quiz_score(data: dict, db: Session = Depends(get_db)):
     quiz_id = data.get("quiz_id")
@@ -763,9 +624,6 @@ async def update_quiz_score(data: dict, db: Session = Depends(get_db)):
     db.refresh(quiz)
     return {"msg": "quiz score updated", "quiz_id": quiz.quiz_id, "score": float(quiz.score)}
 
-    # Endpoint to save/update quiz results. This does not create a new table; it uses existing
-    # models (Quiz, QuizItem, Option). If `quiz_id` is provided it updates the score, otherwise
-    # it creates a new Quiz record and optionally saves items/options when `quiz` array present.
 @router.post("/save_quiz_result")
 async def save_quiz_result(request: Request, db: Session = Depends(get_db)):
     try:
@@ -773,12 +631,27 @@ async def save_quiz_result(request: Request, db: Session = Depends(get_db)):
         quiz_id = body.get("quiz_id")
         student_id = body.get("student_id")
         chapter_id = body.get("chapter_id")
-        score = float(body.get("score", 0))
-        correct = int(body.get("correct", 0))
-        total = int(body.get("total", 0))
         quiz_questions = body.get("quiz") or []
+        user_answers = body.get("user_answers")
+        total_time_seconds = body.get("total_time_seconds", 0)
 
-        # If quiz_id provided, update existing quiz record
+        # Calculate score on the backend
+        score = 0
+        correct_count = 0
+        total_questions = len(quiz_questions)
+
+        if total_questions > 0 and user_answers and len(user_answers) == total_questions:
+            for i, q in enumerate(quiz_questions):
+                correct_answer_letter = q.get("correct_answer", "").strip().upper()
+                user_answer_index = user_answers[i]
+
+                if user_answer_index is not None:
+                    user_answer_letter = chr(65 + user_answer_index)
+                    if user_answer_letter == correct_answer_letter:
+                        correct_count += 1
+            
+            score = round((correct_count / total_questions) * 100, 2)
+
         if quiz_id:
             existing = db.query(models.Quiz).filter_by(quiz_id=quiz_id).first()
             if not existing:
@@ -791,13 +664,15 @@ async def save_quiz_result(request: Request, db: Session = Depends(get_db)):
             db.refresh(existing)
             return {"msg": "quiz updated", "quiz_id": existing.quiz_id, "score": float(existing.score)}
 
-        # Otherwise create a new quiz and (optionally) save items/options
-        quiz = Quiz(
-            created_at = datetime.utcnow(),
-            result_date = datetime.utcnow(),
+        ended_at_time = datetime.utcnow()
+        started_at_time = ended_at_time - timedelta(seconds=total_time_seconds)
+
+        quiz = models.Quiz(
+            created_at = started_at_time,
+            result_date = ended_at_time,
             attempt_number = 1,
-            started_at = datetime.utcnow(),
-            ended_at = datetime.utcnow(),
+            started_at = started_at_time,
+            ended_at = ended_at_time,
             score = score,
             chapter_id = chapter_id,
             student_id = student_id
@@ -807,7 +682,7 @@ async def save_quiz_result(request: Request, db: Session = Depends(get_db)):
 
         saved_items = []
         for q in quiz_questions:
-            item = QuizItem(
+            item = models.QuizItem(
                 question = q.get("question", ""),
                 answer_explain = q.get("explanation", "") or "",
                 quiz_id = quiz.quiz_id
@@ -829,13 +704,12 @@ async def save_quiz_result(request: Request, db: Session = Depends(get_db)):
                 elif corr is None:
                     is_correct = (idx == 0)
 
-                # Ensure option text fits DB column (models.Option.opt is String(35))
                 safe_opt = (opt_text or "").strip()
                 if len(safe_opt) > 35:
                     safe_opt = safe_opt[:35]
                 if not safe_opt:
                     safe_opt = "(no text)"
-                option = Option(
+                option = models.Option(
                     opt = safe_opt,
                     correct = "True" if is_correct else "False",
                     question_id = item.question_id
@@ -845,7 +719,7 @@ async def save_quiz_result(request: Request, db: Session = Depends(get_db)):
             saved_items.append({"question_id": item.question_id, "question": item.question})
 
         db.commit()
-        return {"msg": "quiz saved", "quiz_id": quiz.quiz_id, "score": score, "correct": correct, "total": total, "items": saved_items}
+        return {"msg": "quiz saved", "quiz_id": quiz.quiz_id, "score": score, "correct": correct_count, "total": total_questions, "items": saved_items}
     except HTTPException:
         raise
     except Exception as e:
@@ -854,18 +728,315 @@ async def save_quiz_result(request: Request, db: Session = Depends(get_db)):
 
 app.include_router(router)
 
-
 @app.get("/doubt/{doubt_id}")
-def get_doubt(doubt_id: int, db: Session = Depends(get_db)):
+def get_doubt_details(doubt_id: int, db: Session = Depends(get_db)):
     """Retrieve a doubt and its latest response so frontend can poll for answers."""
     doubt = db.query(models.Doubt).filter_by(doubt_id=doubt_id).first()
     if not doubt:
         raise HTTPException(status_code=404, detail="Doubt not found")
     resp = db.query(models.Response).filter_by(doubt_id=doubt_id).order_by(models.Response.created_at.desc()).first()
-    return {
+    response_data = {
         "doubt_id": doubt.doubt_id,
         "question": doubt.doubt_question,
         "created_at": doubt.created_at.isoformat() if doubt.created_at else None,
         "response": resp.doubt_response if resp else None,
         "response_created_at": resp.created_at.isoformat() if resp and resp.created_at else None
     }
+
+    return response_data
+
+@app.get("/students/{student_id}/statistics")
+def get_student_statistics(student_id: int, db: Session = Depends(get_db)):
+    """
+    Get comprehensive statistics for a student including:
+    - Quiz performance
+    - Doubt resolution rates
+    - Topic-wise performance
+    - Study streak
+    - Recent activity
+    """
+    
+    # Check if student exists
+    student = db.query(models.Student).filter_by(student_id=student_id).first()
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found")
+    
+    # Get all quizzes for this student
+    quizzes = db.query(models.Quiz).filter_by(student_id=student_id).all()
+    
+    # Get all doubts for this student
+    doubts = db.query(models.Doubt).filter_by(student_id=student_id).all()
+    
+    # Calculate basic quiz statistics
+    quiz_count = len(quizzes)
+    if quiz_count > 0:
+        scores = [float(q.score) for q in quizzes if q.score is not None]
+        avg_score = sum(scores) / len(scores) if scores else 0
+        best_score = max(scores) if scores else 0
+        
+        # Calculate average time per quiz (in seconds)
+        times = []
+        for q in quizzes:
+            if q.started_at and q.ended_at:
+                duration = (q.ended_at - q.started_at).total_seconds()
+                times.append(duration)
+        
+        avg_time = sum(times) / len(times) if times else 0
+        fastest_time = min(times) if times else 0
+    else:
+        avg_score = 0
+        best_score = 0
+        avg_time = 0
+        fastest_time = 0
+    
+    # Calculate doubt resolution rate
+    doubt_count = len(doubts)
+    resolved_doubts = db.query(models.Doubt).filter(
+        models.Doubt.student_id == student_id,
+        models.Doubt.doubt_id.in_(
+            db.query(models.Response.doubt_id).distinct()
+        )
+    ).count()
+    
+    doubt_resolution_rate = (resolved_doubts / doubt_count * 100) if doubt_count > 0 else 0
+    
+    # Calculate study streak (consecutive days with activity)
+    study_streak = calculate_study_streak(student_id, db)
+    
+    # Get topic-wise performance
+    topic_performance = get_topic_performance(student_id, db)
+    
+    # Get weekly trend (last 7 days)
+    weekly_trend = get_weekly_trend(student_id, db)
+    
+    # Identify strong and weak areas
+    strong_areas, weak_areas = identify_areas(topic_performance, student_id, db)
+    
+    # Get recent activity
+    recent_activity = get_recent_activity(student_id, db)
+    
+    # Generate personalized suggestions
+    suggestions = generate_suggestions(weak_areas, avg_time, topic_performance)
+    
+    return {
+        "student_id": student_id,
+        "summary": {
+            "study_streak": study_streak,
+            "average_score": round(avg_score, 1),
+            "avg_quiz_time": round(avg_time, 0),
+            "doubt_resolution_rate": round(doubt_resolution_rate, 0)
+        },
+        "performance": {
+            "quizzes_completed": quiz_count,
+            "average_score": round(avg_score, 1),
+            "best_score": round(best_score, 1),
+            "avg_time_per_quiz": round(avg_time, 0),
+            "fastest_completion": round(fastest_time, 0)
+        },
+        "topic_performance": topic_performance,
+        "weekly_trend": weekly_trend,
+        "strong_areas": strong_areas,
+        "weak_areas": weak_areas,
+        "recent_activity": recent_activity,
+        "suggestions": suggestions
+    }
+
+
+def calculate_study_streak(student_id: int, db: Session) -> int:
+    """Calculate consecutive days of study activity"""
+    # Get all quiz dates
+    quiz_dates = db.query(
+        func.date(models.Quiz.created_at).label('date')
+    ).filter(
+        models.Quiz.student_id == student_id
+    ).distinct().order_by(desc('date')).all()
+    
+    if not quiz_dates:
+        return 0
+    
+    # Convert to list of dates
+    dates = [d[0] for d in quiz_dates]
+    
+    # Calculate streak from today
+    today = datetime.now().date()
+    streak = 0
+    current_date = today
+    
+    for date in dates:
+        if date == current_date:
+            streak += 1
+            current_date -= timedelta(days=1)
+        elif date < current_date:
+            break
+    
+    return streak
+
+
+def get_topic_performance(student_id: int, db: Session) -> List[Dict[str, Any]]:
+    """Get performance breakdown by chapter/topic for the first 6 chapters."""
+    
+    # 1. Get the first 6 chapters to create a consistent chart view
+    all_chapters = db.query(models.Chapter).order_by(models.Chapter.chapter_id).limit(6).all()
+    
+    if not all_chapters:
+        return []
+        
+    chapter_ids = [c.chapter_id for c in all_chapters]
+
+    # 2. Get student's performance for these specific chapters
+    results = db.query(
+        models.Chapter.chapter_id,
+        func.avg(models.Quiz.score).label('avg_score')
+    ).join(
+        models.Quiz, models.Quiz.chapter_id == models.Chapter.chapter_id
+    ).filter(
+        models.Quiz.student_id == student_id,
+        models.Chapter.chapter_id.in_(chapter_ids)
+    ).group_by(
+        models.Chapter.chapter_id
+    ).all()
+    
+    # 3. Create a performance map for easy lookup
+    performance_map = {res.chapter_id: res.avg_score for res in results}
+    
+    # 4. Build the final data structure, including chapters with no data (N/A)
+    topic_data = []
+    for chapter in all_chapters:
+        score = performance_map.get(chapter.chapter_id)
+        
+        # Create a shorter name for the chart label that can wrap
+        words = chapter.chapter_name.replace(" and ", " & ").split()
+        if len(words) > 3:
+            short_name = " ".join(words[:3])
+        else:
+            short_name = chapter.chapter_name
+
+        topic_data.append({
+            "name": short_name,
+            "full_name": chapter.chapter_name,
+            "score": round(float(score), 1) if score is not None else 0,
+        })
+    
+    return topic_data
+
+
+def get_weekly_trend(student_id: int, db: Session) -> List[Dict[str, Any]]:
+    """Get performance trend for last 7 days"""
+    today = datetime.now().date()
+    weekly_data = []
+    
+    for i in range(6, -1, -1):  # Last 7 days
+        date = today - timedelta(days=i)
+        
+        # Get average score for that day
+        day_quizzes = db.query(
+            func.avg(models.Quiz.score).label('avg_score')
+        ).filter(
+            models.Quiz.student_id == student_id,
+            func.date(models.Quiz.created_at) == date
+        ).first()
+        
+        avg_score = float(day_quizzes.avg_score) if day_quizzes.avg_score else 0
+        
+        weekly_data.append({
+            "day": date.strftime('%a'),  # Mon, Tue, etc.
+            "date": date.isoformat(),
+            "score": round(avg_score, 1)
+        })
+    
+    return weekly_data
+
+
+def identify_areas(topic_performance: List[Dict], student_id: int, db: Session) -> tuple:
+    """Identify strong and weak areas based on performance"""
+    if not topic_performance:
+        return [], []
+    
+    # Strong areas: top 2 topics with score > 85
+    strong_areas = []
+    for topic in topic_performance[:2]:
+        if topic['score'] >= 85:
+            strong_areas.append({
+                "topic": topic['full_name'],
+                "detail": f"High quiz accuracy ({topic['score']}%)"
+            })
+    
+    # Weak areas: topics with score < 80
+    weak_areas = []
+    for topic in topic_performance:
+        if topic['score'] < 80:
+            weak_areas.append({
+                "topic": topic['full_name'],
+                "detail": f"Lower performance ({topic['score']}%), needs revision"
+            })
+    
+    # Limit to 2 weak areas
+    weak_areas = weak_areas[:2]
+    
+    return strong_areas, weak_areas
+
+
+def get_recent_activity(student_id: int, db: Session) -> List[Dict[str, Any]]:
+    """Get recent quizzes and activity"""
+    recent_quizzes = db.query(models.Quiz).filter(
+        models.Quiz.student_id == student_id
+    ).order_by(
+        desc(models.Quiz.created_at)
+    ).limit(5).all()
+    
+    activities = []
+    for quiz in recent_quizzes:
+        # Get chapter name
+        chapter = db.query(models.Chapter).filter_by(
+            chapter_id=quiz.chapter_id
+        ).first()
+        
+        # Calculate days ago
+        days_ago = (datetime.now() - quiz.created_at).days
+        date_str = f"{days_ago} days ago" if days_ago > 0 else "Today"
+        
+        # Calculate time taken
+        if quiz.started_at and quiz.ended_at:
+            duration = (quiz.ended_at - quiz.started_at).total_seconds()
+            time_str = f"{int(duration)}s"
+        else:
+            time_str = "N/A"
+        
+        activities.append({
+            "activity": f"Quiz: {chapter.chapter_name if chapter else 'Unknown'}",
+            "date": date_str,
+            "score": round(float(quiz.score), 0) if quiz.score else None,
+            "time": time_str
+        })
+    
+    return activities
+
+
+def generate_suggestions(weak_areas: List[Dict], avg_time: float, 
+                        topic_performance: List[Dict]) -> List[Dict[str, str]]:
+    """Generate personalized study suggestions"""
+    suggestions = []
+    
+    # Suggestions based on weak areas
+    if weak_areas:
+        for area in weak_areas[:2]:
+            suggestions.append({
+                "title": f"Revise {area['topic']}",
+                "detail": "Practice 10 MCQs daily and review flashcards for 15 minutes."
+            })
+    
+    # Suggestion based on speed
+    if avg_time > 180:  # More than 3 minutes per quiz
+        suggestions.append({
+            "title": "Improve quiz speed",
+            "detail": "Take timed quizzes to improve pacing to under 150 seconds."
+        })
+    
+    # General suggestion if no specific weak areas
+    if not suggestions:
+        suggestions.append({
+            "title": "Maintain consistency",
+            "detail": "Continue your excellent performance with daily practice."
+        })
+    
+    return suggestions[:3]  # Return max 3 suggestions

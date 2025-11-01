@@ -1,5 +1,6 @@
 # Import the Session class needed to talk to the database
 from sqlalchemy.orm import Session
+import schemas
 
 # Import all the models (these represent our database tables)
 from models import Student, Class, Subject, Chapter, Summary, Flashcard, Image, Ncert
@@ -140,8 +141,8 @@ def create_image(db: Session, image_data):
         image_id=image_data.image_id,         # Unique ID for the image (if not auto-increment)
         image_url=image_data.image_url,       # URL/link to the image file
         image_topic=image_data.image_topic,   # Topic/description
-        summary_id=image_data.summary_id      # Which summary it's linked to
-        # Optionally add: question_id=image_data.question_id
+        summary_id=image_data.summary_id,      # Which summary it's linked to
+        question_id=image_data.question_id
     )
     db.add(image)
     db.commit()
@@ -156,14 +157,13 @@ def get_ncerts(db: Session):
     # Returns all NCERT text entries from the database
     return db.query(Ncert).all()
 
-def create_ncert(db: Session, ncert_data):
-    # Adds a new piece of official NCERT text to the db
-    ncert = Ncert(
-        ncert_id=ncert_data.ncert_id,             # Unique ID (can skip if auto-increment)
-        ncert_text=ncert_data.ncert_text,         # The actual NCERT content
-        text_name=ncert_data.text_name            # Name of the chapter/topic
+def create_ncert(db: Session, ncert: schemas.NcertCreate):
+    db_ncert = Ncert(
+        ncert_text=ncert.ncert_text,
+        text_name=ncert.text_name,
+        chapter_id=ncert.chapter_id
     )
-    db.add(ncert)
+    db.add(db_ncert)
     db.commit()
-    db.refresh(ncert)
-    return ncert
+    db.refresh(db_ncert)
+    return db_ncert
