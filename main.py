@@ -873,48 +873,59 @@ def calculate_study_streak(student_id: int, db: Session) -> int:
 
 
 def get_topic_performance(student_id: int, db: Session) -> List[Dict[str, Any]]:
-    """Get performance breakdown by chapter/topic for the first 6 chapters."""
+    """
+    Get performance breakdown for the 6 most recently quizzed chapters/topics.
+    """
     
-    # 1. Get the first 6 chapters to create a consistent chart view
-    all_chapters = db.query(models.Chapter).order_by(models.Chapter.chapter_id).limit(6).all()
-    
-    if not all_chapters:
-        return []
-        
-    chapter_ids = [c.chapter_id for c in all_chapters]
+    # 1. Find the 6 most recent unique chapters the student has taken a quiz in.
+    #    This subquery finds the latest quiz timestamp for each chapter for the student.
+    latest_quiz_subquery = db.query(
+        models.Quiz.chapter_id,
+        func.max(models.Quiz.created_at).label('last_quiz_date')
+    ).filter(
+        models.Quiz.student_id == student_id
+    ).group_by(
+        models.Quiz.chapter_id
+    ).subquery('latest_quiz')
 
-    # 2. Get student's performance for these specific chapters
+    # 2. Join this with the quizzes and chapters table to get avg scores and names,
+    #    ordering by the most recent activity and limiting to 6.
     results = db.query(
         models.Chapter.chapter_id,
+        models.Chapter.chapter_name,
         func.avg(models.Quiz.score).label('avg_score')
     ).join(
-        models.Quiz, models.Quiz.chapter_id == models.Chapter.chapter_id
-    ).filter(
-        models.Quiz.student_id == student_id,
-        models.Chapter.chapter_id.in_(chapter_ids)
+        latest_quiz_subquery, models.Chapter.chapter_id == latest_quiz_subquery.c.chapter_id
+    ).join(
+        models.Quiz, 
+        and_(
+            models.Quiz.chapter_id == models.Chapter.chapter_id,
+            models.Quiz.student_id == student_id
+        )
     ).group_by(
-        models.Chapter.chapter_id
-    ).all()
-    
-    # 3. Create a performance map for easy lookup
-    performance_map = {res.chapter_id: res.avg_score for res in results}
-    
-    # 4. Build the final data structure, including chapters with no data (N/A)
+        models.Chapter.chapter_id,
+        models.Chapter.chapter_name,
+        latest_quiz_subquery.c.last_quiz_date
+    ).order_by(
+        desc(latest_quiz_subquery.c.last_quiz_date)
+    ).limit(6).all()
+
+    if not results:
+        # If there are no results, return an empty list.
+        # The frontend will show a "start taking quizzes" message.
+        return []
+
+    # 3. Build the final data structure.
     topic_data = []
-    for chapter in all_chapters:
-        score = performance_map.get(chapter.chapter_id)
-        
+    for chapter_id, chapter_name, avg_score in results:
         # Create a shorter name for the chart label that can wrap
-        words = chapter.chapter_name.replace(" and ", " & ").split()
-        if len(words) > 3:
-            short_name = " ".join(words[:3])
-        else:
-            short_name = chapter.chapter_name
+        words = chapter_name.replace(" and ", " & ").split()
+        short_name = " ".join(words[:3]) if len(words) > 3 else chapter_name
 
         topic_data.append({
             "name": short_name,
-            "full_name": chapter.chapter_name,
-            "score": round(float(score), 1) if score is not None else 0,
+            "full_name": chapter_name,
+            "score": round(float(avg_score), 1) if avg_score is not None else 0,
         })
     
     return topic_data
