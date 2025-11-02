@@ -333,6 +333,49 @@ async def generate(request: Request, background_tasks: BackgroundTasks, db: Sess
                     db2.rollback()
                 except Exception:
                     pass
+            
+            # ✅ NEW: Update progress after doubt is answered
+            try:
+                if student_id and chapter_id:
+                    # Check if progress exists for this student-chapter
+                    progress = db2.query(models.Progress).filter(
+                        models.Progress.student_id == student_id,
+                        models.Progress.chapter_id == chapter_id
+                    ).first()
+                    
+                    if progress:
+                        # Update existing progress with latest doubt_id
+                        progress.doubt_id = doubt_id
+                        # Optionally update strong area to show engagement
+                        if not progress.strong_area or progress.strong_area == "Continue practicing":
+                            progress.strong_area = "Active learner - asking questions"
+                        db2.commit()
+                        print(f"✅ Updated progress with doubt {doubt_id} for chapter {chapter_id}")
+                    else:
+                        # Create new progress record focused on doubt engagement
+                        chapter = db2.query(models.Chapter).filter_by(chapter_id=chapter_id).first()
+                        chapter_name = chapter.chapter_name if chapter else f"Chapter {chapter_id}"
+                        
+                        new_progress = models.Progress(
+                            student_id=student_id,
+                            chapter_id=chapter_id,
+                            doubt_id=doubt_id,
+                            quiz_id=None,
+                            avg_time=0.0,
+                            accuracy=0.0,
+                            weak_area=f"{chapter_name}: Start with quizzes to identify weak areas",
+                            strong_area="Active learner - asking questions"
+                        )
+                        db2.add(new_progress)
+                        db2.commit()
+                        print(f"✅ Created new progress record with doubt {doubt_id}")
+            except Exception as e:
+                print(f"⚠️ Failed to update progress for doubt {doubt_id}: {e}")
+                try:
+                    db2.rollback()
+                except Exception:
+                    pass
+                    
         finally:
             db2.close()
 
@@ -715,6 +758,15 @@ async def save_quiz_result(request: Request, db: Session = Depends(get_db)):
             existing.attempt_number = (existing.attempt_number or 0) + 1
             db.commit()
             db.refresh(existing)
+            
+            # UPDATE PROGRESS after quiz completion
+            update_student_progress(
+                student_id=student_id,
+                chapter_id=chapter_id,
+                quiz_id=existing.quiz_id,
+                db=db
+            )
+            
             return {"msg": "quiz updated", "quiz_id": existing.quiz_id, "score": float(existing.score)}
 
         ended_at_time = datetime.utcnow()
@@ -772,6 +824,15 @@ async def save_quiz_result(request: Request, db: Session = Depends(get_db)):
             saved_items.append({"question_id": item.question_id, "question": item.question})
 
         db.commit()
+        
+        # UPDATE PROGRESS after new quiz is saved
+        update_student_progress(
+            student_id=student_id,
+            chapter_id=chapter_id,
+            quiz_id=quiz.quiz_id,
+            db=db
+        )
+        
         return {"msg": "quiz saved", "quiz_id": quiz.quiz_id, "score": score, "correct": correct_count, "total": total_questions, "items": saved_items}
     except HTTPException:
         raise
@@ -798,15 +859,104 @@ def get_doubt_details(doubt_id: int, db: Session = Depends(get_db)):
 
     return response_data
 
+# ✅ UPDATED FUNCTION: Update student progress after quiz completion
+def update_student_progress(student_id: int, chapter_id: int, quiz_id: int = None, 
+                           doubt_id: int = None, db: Session = None):
+    """
+    Update or create progress record for a student after quiz or doubt activity.
+    Calculates accuracy, avg_time, and identifies strong/weak areas.
+    Strong areas: >= 80% accuracy
+    Weak areas: < 80% accuracy
+    
+    ✅ UPDATED: Now updates existing records instead of creating duplicates
+    """
+    try:
+        # Get chapter name for better messaging
+        chapter = db.query(models.Chapter).filter_by(chapter_id=chapter_id).first()
+        chapter_name = chapter.chapter_name if chapter else f"Chapter {chapter_id}"
+        
+        # Get all quizzes for this student and chapter
+        quizzes = db.query(models.Quiz).filter(
+            models.Quiz.student_id == student_id,
+            models.Quiz.chapter_id == chapter_id
+        ).all()
+        
+        if not quizzes:
+            return
+        
+        # Calculate accuracy (average score)
+        scores = [float(q.score) for q in quizzes if q.score is not None]
+        accuracy = sum(scores) / len(scores) if scores else 0
+        
+        # Calculate average time per quiz
+        times = []
+        for q in quizzes:
+            if q.started_at and q.ended_at:
+                duration = (q.ended_at - q.started_at).total_seconds()
+                times.append(duration)
+        avg_time = sum(times) / len(times) if times else 0
+        
+        # Identify weak and strong areas based on 80% threshold
+        if accuracy >= 80:
+            # Strong area
+            strong_area = f"{chapter_name}: Excellent performance ({accuracy:.1f}%)"
+            weak_area = ""  # No weakness if performing well
+        elif accuracy >= 60:
+            # Moderate performance
+            strong_area = f"{chapter_name}: Good understanding of basics"
+            weak_area = f"{chapter_name}: Some advanced topics need revision ({accuracy:.1f}%)"
+        else:
+            # Weak area
+            strong_area = ""  # No strength if performing poorly
+            weak_area = f"{chapter_name}: Needs significant revision ({accuracy:.1f}%)"
+        
+        # ✅ Check if progress record exists for this student-chapter combination
+        progress = db.query(models.Progress).filter(
+            models.Progress.student_id == student_id,
+            models.Progress.chapter_id == chapter_id
+        ).first()
+        
+        if progress:
+            # ✅ UPDATE existing record (prevents duplicates)
+            progress.avg_time = round(avg_time, 2)
+            progress.accuracy = round(accuracy, 2)
+            progress.weak_area = weak_area or "No major weak areas"
+            progress.strong_area = strong_area or "Continue practicing"
+            if quiz_id:
+                progress.quiz_id = quiz_id
+            if doubt_id:
+                progress.doubt_id = doubt_id
+            
+            print(f"✅ UPDATED progress for student {student_id}, chapter {chapter_id}: {accuracy:.1f}% accuracy")
+        else:
+            # ✅ Create NEW progress record (only if none exists)
+            progress = models.Progress(
+                student_id=student_id,
+                chapter_id=chapter_id,
+                quiz_id=quiz_id,
+                doubt_id=doubt_id,
+                avg_time=round(avg_time, 2),
+                accuracy=round(accuracy, 2),
+                weak_area=weak_area or "No major weak areas",
+                strong_area=strong_area or "Continue practicing"
+            )
+            db.add(progress)
+            print(f"✅ CREATED new progress for student {student_id}, chapter {chapter_id}: {accuracy:.1f}% accuracy")
+        
+        db.commit()
+        
+    except Exception as e:
+        print(f"❌ Error updating progress: {e}")
+        try:
+            db.rollback()
+        except:
+            pass
+
 @app.get("/students/{student_id}/statistics")
 def get_student_statistics(student_id: int, db: Session = Depends(get_db)):
     """
-    Get comprehensive statistics for a student including:
-    - Quiz performance
-    - Doubt resolution rates
-    - Topic-wise performance
-    - Study streak
-    - Recent activity
+    Get comprehensive statistics for a student using BOTH quizzes data AND progress table.
+    Progress table provides pre-calculated strong/weak areas based on 80% threshold.
     """
     
     # Check if student exists
@@ -853,23 +1003,23 @@ def get_student_statistics(student_id: int, db: Session = Depends(get_db)):
     
     doubt_resolution_rate = (resolved_doubts / doubt_count * 100) if doubt_count > 0 else 0
     
-    # Calculate study streak (consecutive days with activity)
+    # Calculate study streak
     study_streak = calculate_study_streak(student_id, db)
     
-    # Get topic-wise performance
+    # Get topic-wise performance (from quizzes)
     topic_performance = get_topic_performance(student_id, db)
     
-    # Get weekly trend (last 7 days)
+    # Get weekly trend
     weekly_trend = get_weekly_trend(student_id, db)
     
-    # Identify strong and weak areas
-    strong_areas, weak_areas = identify_areas(topic_performance, student_id, db)
+    # *** NEW: Get strong and weak areas from PROGRESS TABLE ***
+    strong_areas, weak_areas = get_areas_from_progress(student_id, db)
     
     # Get recent activity
     recent_activity = get_recent_activity(student_id, db)
     
-    # Generate personalized suggestions
-    suggestions = generate_suggestions(weak_areas, avg_time, topic_performance)
+    # Generate personalized suggestions based on progress data
+    suggestions = generate_suggestions_from_progress(student_id, avg_time, db)
     
     return {
         "student_id": student_id,
@@ -1011,33 +1161,95 @@ def get_weekly_trend(student_id: int, db: Session) -> List[Dict[str, Any]]:
     return weekly_data
 
 
-def identify_areas(topic_performance: List[Dict], student_id: int, db: Session) -> tuple:
-    """Identify strong and weak areas based on performance"""
-    if not topic_performance:
+# ✅ UPDATED FUNCTION: Get strong and weak areas from Progress table (NO DUPLICATES)
+def get_areas_from_progress(student_id: int, db: Session) -> tuple:
+    """
+    Retrieve strong and weak areas from the Progress table.
+    Strong areas: chapters with >= 80% accuracy
+    Weak areas: chapters with < 80% accuracy
+    
+    ✅ UPDATED: Now returns only ONE record per chapter (latest/best)
+    """
+    
+    # ✅ Get ONLY ONE progress record per chapter (the one with highest accuracy)
+    # This prevents duplicate chapters in the UI
+    subquery = db.query(
+        models.Progress.chapter_id,
+        func.max(models.Progress.accuracy).label('max_accuracy')
+    ).filter(
+        models.Progress.student_id == student_id
+    ).group_by(
+        models.Progress.chapter_id
+    ).subquery()
+    
+    # Join to get the actual progress records with highest accuracy per chapter
+    progress_records = db.query(models.Progress).join(
+        subquery,
+        and_(
+            models.Progress.chapter_id == subquery.c.chapter_id,
+            models.Progress.accuracy == subquery.c.max_accuracy,
+            models.Progress.student_id == student_id
+        )
+    ).order_by(desc(models.Progress.accuracy)).all()
+    
+    if not progress_records:
         return [], []
     
-    # Strong areas: top 2 topics with score > 85
     strong_areas = []
-    for topic in topic_performance[:2]:
-        if topic['score'] >= 85:
-            strong_areas.append({
-                "topic": topic['full_name'],
-                "detail": f"High quiz accuracy ({topic['score']}%)"
-            })
-    
-    # Weak areas: topics with score < 80
     weak_areas = []
-    for topic in topic_performance:
-        if topic['score'] < 80:
+    
+    # ✅ Track chapters we've already added to avoid duplicates
+    seen_chapters = set()
+    
+    for progress in progress_records:
+        # ✅ Skip if we've already processed this chapter
+        if progress.chapter_id in seen_chapters:
+            continue
+        
+        seen_chapters.add(progress.chapter_id)
+        
+        accuracy = float(progress.accuracy) if progress.accuracy else 0
+        
+        # Get chapter name
+        chapter = db.query(models.Chapter).filter_by(
+            chapter_id=progress.chapter_id
+        ).first()
+        chapter_name = chapter.chapter_name if chapter else f"Chapter {progress.chapter_id}"
+        
+        # Strong area: >= 80%
+        if accuracy >= 80:
+            if progress.strong_area and progress.strong_area != "Continue practicing":
+        # Extract just the detail part after the colon
+                if ": " in progress.strong_area:
+                    detail = progress.strong_area.split(": ", 1)[1]
+                else:
+                    detail = progress.strong_area
+            else:
+                detail = f"Excellent performance ({accuracy:.1f}%)"
+            strong_areas.append({
+                "topic": chapter_name,
+                "detail": detail,
+                "accuracy": accuracy
+            })
+        
+        # Weak area: < 80%
+        elif accuracy > 0:  # Only include if there's actual data
+            if progress.weak_area and progress.weak_area != "No major weak areas":
+        # Extract just the detail part after the colon
+                if ": " in progress.weak_area:
+                    detail = progress.weak_area.split(": ", 1)[1]
+                else:
+                    detail = progress.weak_area
+            else:
+                detail = f"Needs improvement ({accuracy:.1f}%)"
             weak_areas.append({
-                "topic": topic['full_name'],
-                "detail": f"Lower performance ({topic['score']}%), needs revision"
+                "topic": chapter_name,
+                "detail": detail,
+                "accuracy": accuracy
             })
     
-    # Limit to 2 weak areas
-    weak_areas = weak_areas[:2]
-    
-    return strong_areas, weak_areas
+    # Return top 3 strong and weak areas
+    return strong_areas[:3], weak_areas[:3]
 
 
 def get_recent_activity(student_id: int, db: Session) -> List[Dict[str, Any]]:
@@ -1076,18 +1288,31 @@ def get_recent_activity(student_id: int, db: Session) -> List[Dict[str, Any]]:
     return activities
 
 
-def generate_suggestions(weak_areas: List[Dict], avg_time: float, 
-                        topic_performance: List[Dict]) -> List[Dict[str, str]]:
-    """Generate personalized study suggestions"""
+# NEW FUNCTION: Generate suggestions based on progress data
+def generate_suggestions_from_progress(student_id: int, avg_time: float, 
+                                       db: Session) -> List[Dict[str, str]]:
+    """
+    Generate personalized study suggestions based on progress table data.
+    """
     suggestions = []
     
+    # Get weak areas from progress table
+    progress_records = db.query(models.Progress).filter(
+        models.Progress.student_id == student_id,
+        models.Progress.accuracy < 80
+    ).order_by(models.Progress.accuracy).limit(2).all()
+    
     # Suggestions based on weak areas
-    if weak_areas:
-        for area in weak_areas[:2]:
-            suggestions.append({
-                "title": f"Revise {area['topic']}",
-                "detail": "Practice 10 MCQs daily and review flashcards for 15 minutes."
-            })
+    for progress in progress_records:
+        chapter = db.query(models.Chapter).filter_by(
+            chapter_id=progress.chapter_id
+        ).first()
+        chapter_name = chapter.chapter_name if chapter else f"Chapter {progress.chapter_id}"
+        
+        suggestions.append({
+            "title": f"Focus on {chapter_name}",
+            "detail": f"Current accuracy: {float(progress.accuracy):.1f}%. Practice 10 MCQs daily and review concepts thoroughly."
+        })
     
     # Suggestion based on speed
     if avg_time > 180:  # More than 3 minutes per quiz
@@ -1096,11 +1321,28 @@ def generate_suggestions(weak_areas: List[Dict], avg_time: float,
             "detail": "Take timed quizzes to improve pacing to under 150 seconds."
         })
     
-    # General suggestion if no specific weak areas
+    # Get strong areas for motivation
+    strong_progress = db.query(models.Progress).filter(
+        models.Progress.student_id == student_id,
+        models.Progress.accuracy >= 80
+    ).order_by(desc(models.Progress.accuracy)).first()
+    
+    if strong_progress and len(suggestions) < 3:
+        chapter = db.query(models.Chapter).filter_by(
+            chapter_id=strong_progress.chapter_id
+        ).first()
+        chapter_name = chapter.chapter_name if chapter else f"Chapter {strong_progress.chapter_id}"
+        
+        suggestions.append({
+            "title": f"Maintain excellence in {chapter_name}",
+            "detail": f"Outstanding {float(strong_progress.accuracy):.1f}% accuracy! Keep revising to retain mastery."
+        })
+    
+    # General suggestion if no specific areas
     if not suggestions:
         suggestions.append({
-            "title": "Maintain consistency",
-            "detail": "Continue your excellent performance with daily practice."
+            "title": "Keep up the great work!",
+            "detail": "Continue your consistent study habits and regular practice."
         })
     
     return suggestions[:3]  # Return max 3 suggestions

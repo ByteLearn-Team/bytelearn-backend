@@ -271,8 +271,8 @@ class Progress(Base):  # Helps track how a student is learning
     progress_id = Column(Integer, primary_key=True, autoincrement=True)  # Unique progress number
     avg_time = Column(Numeric(5, 2), nullable=False)  # Average time per quiz item/chapter
     accuracy = Column(Numeric(5, 2), nullable=False)  # % correct answers
-    weak_area = Column(Text, nullable=False)  # Student's weak topics/areas
-    strong_area = Column(Text, nullable=False)  # Student's strong topics/areas
+    weak_area = Column(Text, nullable=True)  # Student's weak topics/areas
+    strong_area = Column(Text, nullable=True)  # Student's strong topics/areas
     
     student_id = Column(Integer, ForeignKey("students.student_id"))  # Who does this progress belong to?
     quiz_id = Column(Integer, ForeignKey("quizzes.quiz_id"))  # Progress on which quiz?
