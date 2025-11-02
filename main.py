@@ -445,85 +445,138 @@ def update_student(student_id: int, data: dict, db: Session = Depends(get_db)):
 
 @app.post("/generate_quiz")
 async def generate_quiz(request: Request, db: Session = Depends(get_db)):
+    """Generate NEET-pattern quiz questions using NCERT context + Groq AI"""
     body = await request.json()
-    topic = (body.get("topic") or "").strip()
-
+    
     try:
-        num_q_raw = body.get("num_questions", None)
-        if num_q_raw is None:
-            num_questions = 10
-        else:
-            num_questions = int(num_q_raw)
-    except Exception:
-        num_questions = 10
-
-    generate_max = False
-    if num_questions <= 0:
-        generate_max = True
-
-    try:
-        chapterId = body.get("chapter_id")
-        q = db.query(models.Ncert)
-        if chapterId:
-            # Directly filter by chapter_id since the column now exists
-            q = q.filter(models.Ncert.chapter_id == chapterId)
-
-        rows = q.limit(40).all()
-        if not rows:
-            # Fallback for when chapter has no direct NCERT mapping or no chapter_id was given
-            rows = db.query(models.Ncert).limit(80).all()
-
-        text = " ".join([r.ncert_text for r in rows if r.ncert_text])
-        if not text or len(text) < 50:
-            return {"quiz": [], "error": "Not enough NCERT content found for the requested topic."}
-
-        sentences = [s.strip() for s in re.split(r'(?<=[.!?])\s+', text) if len(s.strip()) > 30]
-        random.shuffle(sentences)
-
-        words = re.findall(r"\b[a-zA-Z]{3,}\b", text)
-        words = [w for w in set(words) if len(w) >= 4]
-        if not words:
-            return {"quiz": [], "error": "Not enough vocabulary to create distractors."}
-
-        quiz = []
-        used_questions = set()
-        target_count = num_questions if not generate_max else len(sentences)
+        chapter_id = body.get("chapter_id")
+        num_questions = body.get("num_questions", 10)
         
-        for sent in sentences:
-            if not generate_max and len(quiz) >= num_questions:
-                break
+        if not chapter_id:
+            raise HTTPException(status_code=400, detail="chapter_id is required")
+        
+        # Fetch NCERT content for the chapter
+        q = db.query(models.Ncert)
+        q = q.filter(models.Ncert.chapter_id == chapter_id)
+        rows = q.limit(40).all()
+        
+        if not rows:
+            # Fallback to general NCERT content
+            rows = db.query(models.Ncert).limit(80).all()
+        
+        # Build context from NCERT text
+        context = "\n\n".join([r.ncert_text for r in rows if r.ncert_text])
+        if len(context) > 20000:
+            context = context[:20000]
+        
+        if not context or len(context) < 100:
+            return {"quiz": [], "error": "Not enough NCERT content found for quiz generation."}
+        
+        # Prepare Groq API request
+        groq_url = os.getenv("GROQ_API_URL", "https://api.groq.com/openai/v1/chat/completions")
+        groq_key = os.getenv("GROQ_API_KEY")
+        
+        if not groq_url or not groq_key:
+            raise HTTPException(status_code=500, detail="Groq API not configured")
+        
+        # System prompt for NEET-pattern quiz generation
+        system_prompt = f"""You are an expert NEET Biology question generator. Create {num_questions} high-quality multiple-choice questions based on the NCERT content provided.
 
-            candidates = re.findall(r"\b[a-zA-Z]{4,}\b", sent)
-            candidates = [c for c in candidates if c.lower() not in ("which","that","this","there","their","these","those")]
-            if not candidates:
-                continue
-            keyword = max(candidates, key=len)
-            if keyword.lower() in used_questions:
-                continue
-            used_questions.add(keyword.lower())
+STRICT REQUIREMENTS:
+1. Questions must be NEET-standard difficulty (moderate to hard)
+2. Each question must have EXACTLY 4 options labeled A, B, C, D
+3. Options should be similar in length and plausibility - avoid obvious answers
+4. Include factual recall, application, and conceptual understanding questions
+5. Use scientific terminology appropriately
+6. Distractors (wrong answers) should be plausible and based on common misconceptions
+7. Questions should test deep understanding, not just memorization
 
-            question_text = re.sub(re.escape(keyword), "____", sent, count=1, flags=re.IGNORECASE)
+FORMAT YOUR RESPONSE AS VALID JSON ONLY:
+{{
+  "questions": [
+    {{
+      "question": "Complete question text here",
+      "options": ["Option A text", "Option B text", "Option C text", "Option D text"],
+      "correct_answer": "A",
+      "explanation": "Brief explanation of why this answer is correct"
+    }}
+  ]
+}}
 
-            distractors = [w for w in words if w.lower() != keyword.lower()]
-            random.shuffle(distractors)
-            opts = [keyword] + distractors[:3]
-            random.shuffle(opts)
+NCERT CONTEXT:
+{context}
 
-            formatted_opts = [f"{chr(65+i)}) {opt}" for i, opt in enumerate(opts)]
-            correct_index = opts.index(keyword)
-            correct_letter = chr(65 + correct_index)
-
-            explanation = f"The correct answer is '{keyword}'. Context: {sent}"
-
-            quiz.append({
-                "question": question_text,
-                "options": formatted_opts,
-                "correct_answer": correct_letter,
-                "explanation": explanation
-            })
-
-        return {"quiz": quiz, "topic": topic}
+Generate exactly {num_questions} questions following the format above. Return ONLY the JSON, no additional text."""
+        
+        # Call Groq API
+        headers = {
+            "Authorization": f"Bearer {groq_key}",
+            "Content-Type": "application/json"
+        }
+        
+        payload = {
+            "model": "llama-3.3-70b-versatile",
+            "messages": [
+                {"role": "system", "content": system_prompt}
+            ],
+            "temperature": 0.7,
+            "max_tokens": 4000
+        }
+        
+        async with httpx.AsyncClient(timeout=90.0) as client:
+            response = await client.post(groq_url, json=payload, headers=headers)
+            response.raise_for_status()
+            result = response.json()
+            
+            # Extract AI response
+            ai_response = None
+            if result.get("choices") and isinstance(result["choices"], list) and result["choices"]:
+                message = result["choices"][0].get("message")
+                if message and isinstance(message, dict) and message.get("content"):
+                    ai_response = message["content"]
+            
+            if not ai_response:
+                raise HTTPException(status_code=500, detail="Invalid response from AI")
+            
+            # Parse JSON response
+            import json
+            
+            # Try to extract JSON from response (in case there's extra text)
+            json_start = ai_response.find('{')
+            json_end = ai_response.rfind('}') + 1
+            
+            if json_start == -1 or json_end == 0:
+                raise HTTPException(status_code=500, detail="AI did not return valid JSON")
+            
+            json_str = ai_response[json_start:json_end]
+            quiz_data = json.loads(json_str)
+            
+            # Validate and format questions
+            questions = quiz_data.get("questions", [])
+            
+            if not questions:
+                raise HTTPException(status_code=500, detail="No questions generated")
+            
+            # Format for frontend
+            formatted_quiz = []
+            for q in questions[:num_questions]:  # Ensure we don't exceed requested number
+                formatted_quiz.append({
+                    "question": q.get("question", ""),
+                    "options": q.get("options", [])[:4],  # Ensure exactly 4 options
+                    "correct_answer": q.get("correct_answer", "A"),
+                    "explanation": q.get("explanation", "")
+                })
+            
+            return {"quiz": formatted_quiz, "topic": f"Chapter {chapter_id}"}
+            
+    except json.JSONDecodeError as e:
+        print(f"JSON parsing error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to parse AI response")
+    except httpx.HTTPStatusError as e:
+        print(f"Groq API error: {e.response.status_code} - {e.response.text}")
+        raise HTTPException(status_code=500, detail="AI service error")
     except Exception as e:
+        print(f"Quiz generation error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 from fastapi import APIRouter
