@@ -24,7 +24,7 @@ def _log_fallback(to_email: str, otp: str, err: str | None = None):
         pass
     print(f"[OTP FALLBACK] To: {to_email} OTP: {otp} ERR: {err}")
 
-def _send_via_smtp(host: str, port: int, user: str, password: str, msg: EmailMessage, timeout: int = 10):
+def _send_via_smtp(host: str, port: int, user: str, password: str, msg: EmailMessage, timeout: int = 15):
     last_exc = None
     for attempt in range(1, 4):
         try:
@@ -45,7 +45,7 @@ def _send_via_smtp(host: str, port: int, user: str, password: str, msg: EmailMes
             time.sleep(1 + attempt * 1.5)
     raise last_exc
 
-def _send_via_sendgrid(api_key: str, from_email: str, to_email: str, subject: str, content: str, timeout: int = 10):
+def _send_via_sendgrid(api_key: str, from_email: str, to_email: str, subject: str, content: str, timeout: int = 15):
     url = "https://api.sendgrid.com/v3/mail/send"
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -66,7 +66,7 @@ async def send_otp_email(to_email: str, otp: str, db: Session | None = None, nam
     smtp_user = os.getenv("SMTP_USER")
     smtp_password = os.getenv("SMTP_PASSWORD")
     sendgrid_key = os.getenv("SENDGRID_API_KEY")
-    timeout = int(os.getenv("SMTP_TIMEOUT") or 10)
+    timeout = int(os.getenv("SMTP_TIMEOUT") or 15)
 
     user_name = name
     if not user_name and db is not None:
