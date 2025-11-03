@@ -529,7 +529,6 @@ Create {num_questions} high-quality multiple-choice questions based STRICTLY on 
 
 CRITICAL: AVOID REPETITION
 - Do NOT generate questions similar to previously generated questions from this chapter
-- Previously generated questions: {previous_questions_summary}
 - Vary specific topics, concepts, and angles being tested
 - If a concept was tested before, approach it from a completely different perspective
 - Focus on untested subsections, examples, or applications from the chapter
