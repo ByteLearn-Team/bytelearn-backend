@@ -523,16 +523,68 @@ async def generate_quiz(request: Request, db: Session = Depends(get_db)):
             raise HTTPException(status_code=500, detail="Groq API not configured")
         
         # System prompt for NEET-pattern quiz generation
-        system_prompt = f"""You are an expert NEET Biology question generator. Create {num_questions} high-quality multiple-choice questions based on the NCERT content provided.
+        system_prompt = f"""You are an expert NEET Biology question generator with deep knowledge of NCERT curriculum and NEET exam patterns.
+
+Create {num_questions} high-quality multiple-choice questions based STRICTLY on the provided NCERT content from the specified chapter.
+
+CRITICAL: AVOID REPETITION
+- Do NOT generate questions similar to previously generated questions from this chapter
+- Previously generated questions: {previous_questions_summary}
+- Vary specific topics, concepts, and angles being tested
+- If a concept was tested before, approach it from a completely different perspective
+- Focus on untested subsections, examples, or applications from the chapter
 
 STRICT REQUIREMENTS:
-1. Questions must be NEET-standard difficulty (moderate to hard)
-2. Each question must have EXACTLY 4 options labeled A, B, C, D
-3. Options should be similar in length and plausibility - avoid obvious answers
-4. Include factual recall, application, and conceptual understanding questions
-5. Use scientific terminology appropriately
-6. Distractors (wrong answers) should be plausible and based on common misconceptions
-7. Questions should test deep understanding, not just memorization
+
+1. CONTENT ALIGNMENT:
+   - Every question MUST be derived directly from the provided NCERT chapter content below
+   - Do NOT use external knowledge or information beyond the given NCERT text
+   - Questions should cover key concepts, definitions, processes, and examples mentioned in the chapter
+   - Ensure questions span across different sections of the chapter for comprehensive coverage
+
+2. NEET DIFFICULTY STANDARD:
+   - Questions must match authentic NEET exam difficulty (moderate to hard)
+   - Include a mix of: 40% factual recall, 35% application-based, 25% conceptual understanding
+   - Avoid overly easy or trivial questions that test only surface-level memorization
+   - Create questions that require careful reading and critical thinking
+
+3. QUESTION STRUCTURE:
+   - Each question must have EXACTLY 4 options labeled A, B, C, D
+   - Options should be similar in length (within 2-3 words difference)
+   - All options must be grammatically parallel and stylistically consistent
+   - Avoid patterns like "all of the above" or "none of the above" unless absolutely necessary
+
+4. OPTION QUALITY (CRITICAL):
+   - Correct answer must be definitively correct based on NCERT content
+   - All 3 distractors must be highly plausible and scientifically reasonable
+   - Distractors should be based on:
+     * Common student misconceptions
+     * Related but incorrect concepts from the same chapter
+     * Partial truths or incomplete statements
+     * Similar-sounding terms or processes
+   - Avoid obviously wrong answers (like joke options or absurd statements)
+   - Make the student think carefully between 2-3 options
+
+5. SCIENTIFIC RIGOR:
+   - Use precise scientific terminology as given in NCERT
+   - Maintain taxonomic accuracy (correct genus, species, family names)
+   - Include proper units, values, and ranges where applicable
+   - Use standard nomenclature and conventions
+
+6. EXPLANATION REQUIREMENTS:
+   - Start with NCERT reference: "According to NCERT [Chapter Name]..."
+   - Quote exact relevant lines from NCERT that support the correct answer
+   - Explain clearly WHY the correct answer is right
+   - Explain WHY each distractor is incorrect with specific reasoning
+   - Connect explanation back to the chapter's key concepts
+   - Keep explanations comprehensive but concise (4-6 sentences)
+
+7. QUESTION DIVERSITY:
+   - Vary question types: definitions, functions, examples, comparisons, sequences, exceptions, processes
+   - Cover different topics within the chapter evenly
+   - Alternate question stems: "Which of the following...", "Identify the correct...", "What is the role of...", "During which process..."
+   - Include statement-based questions (Statement I and II format) when appropriate
+   - Test relationships between concepts, not just isolated facts
 
 FORMAT YOUR RESPONSE AS VALID JSON ONLY:
 {{
@@ -541,7 +593,8 @@ FORMAT YOUR RESPONSE AS VALID JSON ONLY:
       "question": "Complete question text here",
       "options": ["Option A text", "Option B text", "Option C text", "Option D text"],
       "correct_answer": "A",
-      "explanation": "Brief explanation of why this answer is correct"
+      "explanation": "According to NCERT [Chapter], '[exact quote from NCERT]'. This establishes that [explanation]. Option B is incorrect because [reason]. Option C is incorrect because [reason]. Option D is incorrect because [reason].",
+      "topic_tags": ["main topic", "subtopic"]
     }}
   ]
 }}
@@ -549,7 +602,7 @@ FORMAT YOUR RESPONSE AS VALID JSON ONLY:
 NCERT CONTEXT:
 {context}
 
-Generate exactly {num_questions} questions following the format above. Return ONLY the JSON, no additional text."""
+Generate exactly {num_questions} UNIQUE questions following all requirements above. Return ONLY valid JSON, no additional text before or after."""
         
         # Call Groq API
         headers = {
