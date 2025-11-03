@@ -1286,8 +1286,6 @@ def get_recent_activity(student_id: int, db: Session) -> List[Dict[str, Any]]:
         })
     
     return activities
-
-
 # NEW FUNCTION: Generate suggestions based on progress data
 def generate_suggestions_from_progress(student_id: int, avg_time: float, 
                                        db: Session) -> List[Dict[str, str]]:
