@@ -128,6 +128,28 @@ def create_flashcard(db: Session, flashcard_data):
     return flashcard
 
 # ============================================================
+# IMAGE CRUD OPERATIONS (for summaries/questions)
+# ============================================================
+
+def get_images(db: Session):
+    # Gets all images from the database
+    return db.query(Image).all()
+
+def create_image(db: Session, image_data):
+    # Adds a new image record to the database
+    image = Image(
+        image_id=image_data.image_id,         # Unique ID for the image (if not auto-increment)
+        image_url=image_data.image_url,       # URL/link to the image file
+        image_topic=image_data.image_topic,   # Topic/description
+        summary_id=image_data.summary_id,      # Which summary it's linked to
+        question_id=image_data.question_id
+    )
+    db.add(image)
+    db.commit()
+    db.refresh(image)
+    return image
+
+# ============================================================
 # NCERT CRUD OPERATIONS (for official textbook text)
 # ============================================================
 

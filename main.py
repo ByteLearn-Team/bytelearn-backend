@@ -125,6 +125,14 @@ def get_all_flashcards(db: Session = Depends(get_db)):
 def create_flashcard(flashcard: schemas.FlashcardCreate, db: Session = Depends(get_db)):
     return crud.create_flashcard(db, flashcard)
 
+@app.get("/images", response_model=list[schemas.ImageOut])
+def get_all_images(db: Session = Depends(get_db)):
+    return crud.get_images(db)
+
+@app.post("/images", response_model=schemas.ImageOut)
+def create_image(image: schemas.ImageCreate, db: Session = Depends(get_db)):
+    return crud.create_image(db, image)
+
 @app.get("/ncert", response_model=list[schemas.NcertOut])
 def get_all_ncerts(db: Session = Depends(get_db)):
     return crud.get_ncerts(db)

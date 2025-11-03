@@ -105,6 +105,26 @@ class FlashcardOut(BaseModel):
         from_attributes = True        # Fill from ORM
 
 # ==================================
+# IMAGE SCHEMA
+# ==================================
+
+class ImageCreate(BaseModel):
+    image_id: int                     # Unique ID for the image
+    image_url: str                    # URL address of the image
+    image_topic: str                  # Topic or description for the image
+    summary_id: Optional[int] = None
+    question_id: Optional[int] = None
+
+class ImageOut(BaseModel):
+    image_id: int                     # Unique ID for the image
+    image_url: str                    # URL address of the image
+    image_topic: str                  # Topic or description for the image
+    summary_id: Optional[int] = None
+    question_id: Optional[int] = None
+    class Config:
+        from_attributes = True        # Fill from ORM
+
+# ==================================
 # NCERT SCHEMA
 # ==================================
 
