@@ -131,22 +131,6 @@ class Flashcard(Base):  # Stores simple facts or Q&A for revision
     chapter = relationship("Chapter", back_populates="flashcards")
 
 # =======================
-# Image Table
-# =======================
-
-class Image(Base):
-    __tablename__ = "images"
-    image_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    image_url = Column(String(255))
-    image_topic = Column(String(255))
-    summary_id = Column(Integer, ForeignKey("summaries.summary_id"), nullable=True)
-    question_id = Column(Integer, ForeignKey("quiz_items.question_id"), nullable=True)
-
-    summary = relationship("Summary", back_populates="images")
-    question = relationship("QuizItem", back_populates="images")
-
-
-# =======================
 # Doubt Table (Student Questions)
 # =======================
 
