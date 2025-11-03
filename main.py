@@ -1267,9 +1267,9 @@ def get_recent_activity(student_id: int, db: Session) -> List[Dict[str, Any]]:
             chapter_id=quiz.chapter_id
         ).first()
         
-        # Calculate days ago
-        days_ago = (datetime.now() - quiz.created_at).days
-        date_str = f"{days_ago} days ago" if days_ago > 0 else "Today"
+        # ✅ FIXED: Return actual ISO date string instead of "Today" or "X days ago"
+        # Frontend will handle the date formatting
+        date_str = quiz.created_at.date().isoformat() if quiz.created_at else None
         
         # Calculate time taken
         if quiz.started_at and quiz.ended_at:
@@ -1280,7 +1280,7 @@ def get_recent_activity(student_id: int, db: Session) -> List[Dict[str, Any]]:
         
         activities.append({
             "activity": f"Quiz: {chapter.chapter_name if chapter else 'Unknown'}",
-            "date": date_str,
+            "date": date_str,  # ✅ Now returns "2024-11-03" format
             "score": round(float(quiz.score), 0) if quiz.score else None,
             "time": time_str
         })
