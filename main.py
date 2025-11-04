@@ -4,16 +4,7 @@ from database import SessionLocal
 from fastapi.middleware.cors import CORSMiddleware
 from otp_utils import generate_otp, hash_otp, send_otp_email
 from datetime import datetime, timedelta
-import os
-import json
-import secrets
-import httpx
-import bcrypt
-import models, schemas, crud
-import re
-import random
-from sqlalchemy import or_
-from sqlalchemy import func, desc
+from sqlalchemy import and_, or_, func, desc
 from typing import List, Dict, Any
 from dotenv import load_dotenv
 
@@ -697,7 +688,8 @@ Generate exactly {num_questions} UNIQUE questions following all requirements abo
         payload = {
             "model": "llama-3.3-70b-versatile",
             "messages": [
-                {"role": "system", "content": system_prompt}
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
             ],
             "temperature": 0.7,
             "max_tokens": 4000
