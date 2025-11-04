@@ -574,9 +574,8 @@ def update_student(student_id: int, data: dict, db: Session = Depends(get_db)):
 @app.post("/generate_quiz")
 async def generate_quiz(request: Request, db: Session = Depends(get_db)):
     """Generate NEET-pattern quiz questions using NCERT context + Groq AI"""
-    body = await request.json()
-    
     try:
+        body = await request.json()
         chapter_id = body.get("chapter_id")
         num_questions = body.get("num_questions", 10)
         
@@ -584,30 +583,29 @@ async def generate_quiz(request: Request, db: Session = Depends(get_db)):
             raise HTTPException(status_code=400, detail="chapter_id is required")
         
         # Fetch NCERT content for the chapter
-        q = db.query(models.Ncert)
-        q = q.filter(models.Ncert.chapter_id == chapter_id)
+        q = db.query(models.Ncert).filter(models.Ncert.chapter_id == chapter_id)
         rows = q.limit(40).all()
         
         if not rows:
-            # Fallback to general NCERT content
-            rows = db.query(models.Ncert).limit(80).all()
+            return {"quiz": [], "error": "Not enough NCERT content found"}
         
         # Build context from NCERT text
         context = "\n\n".join([r.ncert_text for r in rows if r.ncert_text])
         if len(context) > 20000:
             context = context[:20000]
         
-        if not context or len(context) < 100:
-            return {"quiz": [], "error": "Not enough NCERT content found for quiz generation."}
+        # Get chapter name for better prompting
+        chapter = db.query(models.Chapter).filter_by(chapter_id=chapter_id).first()
+        chapter_name = chapter.chapter_name if chapter else f"Chapter {chapter_id}"
         
         # Prepare Groq API request
-        groq_url = os.getenv("GROQ_API_URL", "https://api.groq.com/openai/v1/chat/completions")
+        groq_url = os.getenv("GROQ_API_URL")
         groq_key = os.getenv("GROQ_API_KEY")
         
         if not groq_url or not groq_key:
             raise HTTPException(status_code=500, detail="Groq API not configured")
         
-        # System prompt for NEET-pattern quiz generation
+        # Your provided system prompt
         system_prompt = f"""You are an expert NEET Biology question generator with deep knowledge of NCERT curriculum and NEET exam patterns.
 
 Create {num_questions} high-quality multiple-choice questions based STRICTLY on the provided NCERT content from the specified chapter.
@@ -687,7 +685,7 @@ NCERT CONTEXT:
 {context}
 
 Generate exactly {num_questions} UNIQUE questions following all requirements above. Return ONLY valid JSON, no additional text before or after."""
-        
+
         # Call Groq API
         headers = {
             "Authorization": f"Bearer {groq_key}",
@@ -697,8 +695,7 @@ Generate exactly {num_questions} UNIQUE questions following all requirements abo
         payload = {
             "model": "llama-3.3-70b-versatile",
             "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
+                {"role": "system", "content": system_prompt}
             ],
             "temperature": 0.7,
             "max_tokens": 4000
@@ -711,23 +708,20 @@ Generate exactly {num_questions} UNIQUE questions following all requirements abo
             
             # Extract AI response
             ai_response = None
-            if result.get("choices") and isinstance(result["choices"], list) and result["choices"]:
+            if result.get("choices") and result["choices"]:
                 message = result["choices"][0].get("message")
-                if message and isinstance(message, dict) and message.get("content"):
-                    ai_response = message["content"]
+                if message and isinstance(message, dict):
+                    ai_response = message.get("content")
             
             if not ai_response:
-                raise HTTPException(status_code=500, detail="Invalid response from AI")
+                raise HTTPException(status_code=500, detail="Invalid AI response")
             
-            # Parse JSON response
-            import json
-            
-            # Try to extract JSON from response (in case there's extra text)
+            # Parse JSON safely
             json_start = ai_response.find('{')
             json_end = ai_response.rfind('}') + 1
             
-            if json_start == -1 or json_end == 0:
-                raise HTTPException(status_code=500, detail="AI did not return valid JSON")
+            if json_start == -1 or json_end <= 0:
+                raise HTTPException(status_code=500, detail="Invalid JSON in AI response")
             
             json_str = ai_response[json_start:json_end]
             quiz_data = json.loads(json_str)
@@ -736,19 +730,23 @@ Generate exactly {num_questions} UNIQUE questions following all requirements abo
             questions = quiz_data.get("questions", [])
             
             if not questions:
-                raise HTTPException(status_code=500, detail="No questions generated")
+                return {"quiz": [], "error": "No questions generated"}
             
             # Format for frontend
             formatted_quiz = []
-            for q in questions[:num_questions]:  # Ensure we don't exceed requested number
+            for q in questions[:num_questions]:
+                opts = q.get("options", [])[:4]
+                while len(opts) < 4:
+                    opts.append("")
+                
                 formatted_quiz.append({
-                    "question": q.get("question", ""),
-                    "options": q.get("options", [])[:4],  # Ensure exactly 4 options
+                    "question": q.get("question", "").strip(),
+                    "options": opts,
                     "correct_answer": q.get("correct_answer", "A"),
                     "explanation": q.get("explanation", "")
                 })
             
-            return {"quiz": formatted_quiz, "topic": f"Chapter {chapter_id}"}
+            return {"quiz": formatted_quiz, "topic": chapter_name}
             
     except json.JSONDecodeError as e:
         print(f"JSON parsing error: {e}")
@@ -760,10 +758,7 @@ Generate exactly {num_questions} UNIQUE questions following all requirements abo
         print(f"Quiz generation error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-from fastapi import APIRouter
-router = APIRouter()
-
-@router.post("/generate_and_save_quiz")
+@app.post("/generate_and_save_quiz")
 async def generate_and_save_quiz(request: Request, db: Session = Depends(get_db)):
     try:
         body = await request.json()
@@ -834,7 +829,7 @@ async def generate_and_save_quiz(request: Request, db: Session = Depends(get_db)
         db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.post("/update_quiz_score")
+@app.post("/update_quiz_score")
 async def update_quiz_score(data: dict, db: Session = Depends(get_db)):
     quiz_id = data.get("quiz_id")
     if not quiz_id:
@@ -858,7 +853,7 @@ async def update_quiz_score(data: dict, db: Session = Depends(get_db)):
     db.refresh(quiz)
     return {"msg": "quiz score updated", "quiz_id": quiz.quiz_id, "score": float(quiz.score)}
 
-@router.post("/save_quiz_result")
+@app.post("/save_quiz_result")
 async def save_quiz_result(request: Request, db: Session = Depends(get_db)):
     try:
         body = await request.json()
@@ -996,7 +991,7 @@ def get_doubt_details(doubt_id: int, db: Session = Depends(get_db)):
 
     return response_data
 
-# ✅ UPDATED FUNCTION: Update student progress after quiz completion
+# ✅ UPDATED FUNCTION: Update student progress after quiz or doubt activity
 def update_student_progress(student_id: int, chapter_id: int, quiz_id: int = None, 
                            doubt_id: int = None, db: Session = None):
     """
@@ -1606,7 +1601,7 @@ STRICT REQUIREMENTS:
 
 7. QUESTION DIVERSITY:
    - Vary question types: definitions, functions, examples, comparisons, sequences, exceptions, processes
-   - Cover different topics within each chapter evenly
+   - Cover different topics within the chapter evenly
    - Alternate question stems: "Which of the following...", "Identify the correct...", "What is the role of...", "During which process..."
    - Include statement-based questions (Statement I and II format) when appropriate
    - Test relationships between concepts, not just isolated facts
