@@ -1484,156 +1484,88 @@ def generate_suggestions_from_progress(student_id: int, avg_time: float,
 
 @app.post("/generate_mock_test")
 async def generate_mock_test(request: Request, db: Session = Depends(get_db)):
-    """
-    Generate a comprehensive mock test covering multiple chapters.
-    Used for Class 11 and Class 12 full mock tests (20 questions each).
-    """
-    body = await request.json()
-    
+    """Generate a comprehensive mock test covering multiple chapters."""
     try:
+        body = await request.json()
+        
         chapter_ids = body.get("chapter_ids", [])
         num_questions = body.get("num_questions", 20)
         class_type = body.get("class_type", "class11")
         
         if not chapter_ids:
             raise HTTPException(status_code=400, detail="chapter_ids is required")
-        
-        # Fetch NCERT content for ALL selected chapters
+
+        # Fetch NCERT content
         all_ncert_rows = []
         for chapter_id in chapter_ids:
-            q = db.query(models.Ncert).filter(models.Ncert.chapter_id == chapter_id)
-            rows = q.limit(10).all()  # ~10 rows per chapter for balanced coverage
+            rows = db.query(models.Ncert).filter(
+                models.Ncert.chapter_id == chapter_id
+            ).limit(10).all()
             all_ncert_rows.extend(rows)
-        
+
         if not all_ncert_rows:
-            return {"quiz": [], "error": "Not enough NCERT content found for mock test generation."}
-        
-        # Build context from all chapters
+            return {"quiz": [], "error": "Not enough NCERT content found"}
+
+        # Build context from chapters
         context_parts = []
         for row in all_ncert_rows:
             if row.ncert_text:
-                # Add chapter identifier to help AI distribute questions
-                chapter = db.query(models.Chapter).filter_by(chapter_id=row.chapter_id).first()
+                chapter = db.query(models.Chapter).filter_by(
+                    chapter_id=row.chapter_id
+                ).first()
                 chapter_name = chapter.chapter_name if chapter else f"Chapter {row.chapter_id}"
                 context_parts.append(f"[{chapter_name}]\n{row.ncert_text}")
-        
+
         context = "\n\n".join(context_parts)
         if len(context) > 20000:
             context = context[:20000]
-        
-        if not context or len(context) < 100:
-            return {"quiz": [], "error": "Not enough NCERT content found for quiz generation."}
-        
-        # Prepare Groq API request
-        groq_url = os.getenv("GROQ_API_URL", "https://api.groq.com/openai/v1/chat/completions")
+
+        # Validate Groq API configuration
+        groq_url = os.getenv("GROQ_API_URL")
         groq_key = os.getenv("GROQ_API_KEY")
-        
+
         if not groq_url or not groq_key:
             raise HTTPException(status_code=500, detail="Groq API not configured")
-        
-        # Get chapter names for better prompting
+
+        # Get chapter names
         chapter_names = []
         for chapter_id in chapter_ids:
             chapter = db.query(models.Chapter).filter_by(chapter_id=chapter_id).first()
             if chapter:
                 chapter_names.append(chapter.chapter_name)
-        
+
         chapters_list = ", ".join(chapter_names[:10]) + ("..." if len(chapter_names) > 10 else "")
-        
-        # System prompt for mock test generation (same style as existing quiz generation)
+
+        # System prompt for mock test generation
         system_prompt = f"""You are an expert NEET Biology question generator creating a MOCK TEST covering multiple chapters.
+        
+        Create {num_questions} high-quality multiple-choice questions distributed across these chapters:
+        {chapters_list}
 
-Create {num_questions} high-quality multiple-choice questions distributed across the following chapters:
-{chapters_list}
+        FORMAT YOUR RESPONSE AS VALID JSON ONLY:
+        {{
+          "questions": [
+            {{
+              "question": "Complete question text here",
+              "options": ["Option A text", "Option B text", "Option C text", "Option D text"],
+              "correct_answer": "A",
+              "explanation": "According to NCERT [Chapter], '[exact quote]'. This establishes that [explanation]. Option B is incorrect because [reason]. Option C is incorrect because [reason]. Option D is incorrect because [reason].",
+              "chapter_name": "Chapter Name Here"
+            }}
+          ]
+        }}
 
-CRITICAL DISTRIBUTION REQUIREMENTS:
-- Generate questions EVENLY across ALL chapters provided
-- Aim for approximately {num_questions // len(chapter_ids)} questions per chapter
-- Do NOT focus on just 2-3 chapters - cover ALL chapters comprehensively
-- Ensure diverse topic coverage within each chapter
+        NCERT CONTEXT:
+        {context}
 
-CRITICAL: AVOID REPETITION
-- Do NOT generate questions similar to previously generated questions
-- Vary specific topics, concepts, and angles being tested
-- If a concept was tested before, approach it from a completely different perspective
-- Focus on different subsections and applications from each chapter
-
-STRICT REQUIREMENTS:
-
-1. CONTENT ALIGNMENT:
-   - Every question MUST be derived directly from the provided NCERT chapter content
-   - Do NOT use external knowledge or information beyond the given NCERT text
-   - Questions should cover key concepts, definitions, processes, and examples mentioned in chapters
-   - Use the [Chapter Name] markers in context to identify and distribute questions
-
-2. NEET DIFFICULTY STANDARD:
-   - Questions must match authentic NEET exam difficulty (moderate to hard)
-   - Include a mix of: 40% factual recall, 35% application-based, 25% conceptual understanding
-   - Avoid overly easy or trivial questions that test only surface-level memorization
-   - Create questions that require careful reading and critical thinking
-
-3. QUESTION STRUCTURE:
-   - Each question must have EXACTLY 4 options labeled A, B, C, D
-   - Options should be similar in length (within 2-3 words difference)
-   - All options must be grammatically parallel and stylistically consistent
-   - Avoid patterns like "all of the above" or "none of the above" unless absolutely necessary
-
-4. OPTION QUALITY (CRITICAL):
-   - Correct answer must be definitively correct based on NCERT content
-   - All 3 distractors must be highly plausible and scientifically reasonable
-   - Distractors should be based on:
-     * Common student misconceptions
-     * Related but incorrect concepts from the same chapter
-     * Partial truths or incomplete statements
-     * Similar-sounding terms or processes
-   - Avoid obviously wrong answers (like joke options or absurd statements)
-   - Make the student think carefully between 2-3 options
-
-5. SCIENTIFIC RIGOR:
-   - Use precise scientific terminology as given in NCERT
-   - Maintain taxonomic accuracy (correct genus, species, family names)
-   - Include proper units, values, and ranges where applicable
-   - Use standard nomenclature and conventions
-
-6. EXPLANATION REQUIREMENTS:
-   - Start with NCERT reference: "According to NCERT [Chapter Name]..."
-   - Quote exact relevant lines from NCERT that support the correct answer
-   - Explain clearly WHY the correct answer is right
-   - Explain WHY each distractor is incorrect with specific reasoning
-   - Connect explanation back to the chapter's key concepts
-   - Keep explanations comprehensive but concise (4-6 sentences)
-
-7. QUESTION DIVERSITY:
-   - Vary question types: definitions, functions, examples, comparisons, sequences, exceptions, processes
-   - Cover different topics within each chapter evenly
-   - Alternate question stems: "Which of the following...", "Identify the correct...", "What is the role of...", "During which process..."
-   - Include statement-based questions (Statement I and II format) when appropriate
-   - Test relationships between concepts, not just isolated facts
-
-FORMAT YOUR RESPONSE AS VALID JSON ONLY:
-{{
-  "questions": [
-    {{
-      "question": "Complete question text here",
-      "options": ["Option A text", "Option B text", "Option C text", "Option D text"],
-      "correct_answer": "A",
-      "explanation": "According to NCERT [Chapter], '[exact quote from NCERT]'. This establishes that [explanation]. Option B is incorrect because [reason]. Option C is incorrect because [reason]. Option D is incorrect because [reason].",
-      "chapter_name": "Chapter Name Here"
-    }}
-  ]
-}}
-
-NCERT CONTEXT (Multiple Chapters):
-{context}
-
-Generate exactly {num_questions} UNIQUE questions distributed across ALL chapters. Return ONLY valid JSON, no additional text before or after."""
+        Generate exactly {num_questions} UNIQUE questions. Return ONLY valid JSON."""
         
         # Call Groq API
         headers = {
             "Authorization": f"Bearer {groq_key}",
             "Content-Type": "application/json"
         }
-        
+
         payload = {
             "model": "llama-3.3-70b-versatile",
             "messages": [
@@ -1642,46 +1574,40 @@ Generate exactly {num_questions} UNIQUE questions distributed across ALL chapter
             "temperature": 0.7,
             "max_tokens": 6000
         }
-        
+
         async with httpx.AsyncClient(timeout=90.0) as client:
             response = await client.post(groq_url, json=payload, headers=headers)
             response.raise_for_status()
             result = response.json()
-            
-            # Extract AI response
+
+            # Fixed: Extract AI response from Groq chat completion format
             ai_response = None
-            if result.get("choices") and isinstance(result["choices"], list) and result["choices"]:
-                message = result["choices"][0].get("message")
-                if message and isinstance(message, dict) and message.get("content"):
-                    ai_response = message["content"]
-            
+            if result.get("choices") and result["choices"]:
+                message = result["choices"][0].get("message", {})
+                ai_response = message.get("content")
+
             if not ai_response:
-                raise HTTPException(status_code=500, detail="Invalid response from AI")
-            
-            # Parse JSON response
-            # Try to extract JSON from response (in case there's extra text)
+                raise HTTPException(status_code=500, detail="Invalid AI response")
+
+            # Parse JSON safely
             json_start = ai_response.find('{')
             json_end = ai_response.rfind('}') + 1
-            
-            if json_start == -1 or json_end == 0:
-                raise HTTPException(status_code=500, detail="AI did not return valid JSON")
-            
-            json_str = ai_response[json_start:json_end]
-            quiz_data = json.loads(json_str)
-            
-            # Validate and format questions
+            if json_start == -1 or json_end <= 0:
+                raise HTTPException(status_code=500, detail="Invalid JSON in AI response")
+
+            quiz_data = json.loads(ai_response[json_start:json_end])
             questions = quiz_data.get("questions", [])
-            
+
             if not questions:
-                raise HTTPException(status_code=500, detail="No questions generated")
-            
-            # Format for frontend
+                return {"quiz": [], "error": "No questions generated"}
+
+            # Format quiz for frontend
             formatted_quiz = []
-            for q in questions[:num_questions]:  # Ensure we don't exceed requested number
+            for q in questions[:num_questions]:
                 opts = q.get("options", [])[:4]
-                # ensure exactly 4 options; pad if necessary (shouldn't be needed but defensive)
                 while len(opts) < 4:
                     opts.append("")
+                
                 formatted_quiz.append({
                     "question": q.get("question", "").strip(),
                     "options": opts,
@@ -1689,19 +1615,19 @@ Generate exactly {num_questions} UNIQUE questions distributed across ALL chapter
                     "explanation": q.get("explanation", ""),
                     "chapter_name": q.get("chapter_name", "Mixed")
                 })
-            
+
             return {
-                "quiz": formatted_quiz, 
+                "quiz": formatted_quiz,
                 "topic": f"{class_type.upper()} Mock Test",
                 "total_questions": len(formatted_quiz)
             }
-            
-    except json.JSONDecodeError as e:
-        print(f"JSON parsing error: {e}")
-        raise HTTPException(status_code=500, detail="Failed to parse AI response")
+
     except httpx.HTTPStatusError as e:
         print(f"Groq API error: {e.response.status_code} - {e.response.text}")
         raise HTTPException(status_code=500, detail="AI service error")
+    except json.JSONDecodeError as e:
+        print(f"JSON parsing error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to parse AI response")
     except Exception as e:
         print(f"Mock test generation error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
