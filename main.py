@@ -1531,6 +1531,11 @@ async def generate_mock_test(request: Request, db: Session = Depends(get_db)):
         chapter_names = []
         for chapter_id in chapter_ids:
             chapter = db.query(models.Chapter).filter_by(chapter_id=chapter_id).first()
+        
+        # Get chapter names for better prompting
+        chapter_names = []
+        for chapter_id in chapter_ids:
+            chapter = db.query(models.Chapter).filter_by(chapter_id=chapter_id).first()
             if chapter:
                 chapter_names.append(chapter.chapter_name)
         
@@ -1601,7 +1606,7 @@ STRICT REQUIREMENTS:
 
 7. QUESTION DIVERSITY:
    - Vary question types: definitions, functions, examples, comparisons, sequences, exceptions, processes
-   - Cover different topics within the chapter evenly
+   - Cover different topics within each chapter evenly
    - Alternate question stems: "Which of the following...", "Identify the correct...", "What is the role of...", "During which process..."
    - Include statement-based questions (Statement I and II format) when appropriate
    - Test relationships between concepts, not just isolated facts
