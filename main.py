@@ -1434,6 +1434,7 @@ CRITICAL DISTRIBUTION REQUIREMENTS:
 - Aim for approximately {num_questions // len(chapter_ids)} questions per chapter
 - Do NOT focus on just 2-3 chapters - cover ALL chapters comprehensively
 - Ensure diverse topic coverage within each chapter
+- Don't just randomly generate many questions from just one or two chapters - balance it out!
 
 1. CONTENT ALIGNMENT:
    - Every question MUST be derived from the provided NCERT content
