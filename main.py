@@ -639,7 +639,7 @@ STRICT REQUIREMENTS:
    - Use standard nomenclature and conventions
 
 6. EXPLANATION REQUIREMENTS:
-   - Start with NCERT reference: "According to NCERT [Chapter Name]..."
+   - Start with NCERT reference: "According to [Chapter Name]..."
    - Quote exact relevant lines from NCERT that support the correct answer
    - Explain clearly WHY the correct answer is right
    - Explain WHY each distractor is incorrect with specific reasoning
@@ -1435,6 +1435,7 @@ CRITICAL DISTRIBUTION REQUIREMENTS:
 - Do NOT focus on just 2-3 chapters - cover ALL chapters comprehensively
 - Ensure diverse topic coverage within each chapter
 - Don't just randomly generate many questions from just one or two chapters - balance it out!
+- Dont generate more than 2 questions from one chapter
 
 1. CONTENT ALIGNMENT:
    - Every question MUST be derived from the provided NCERT content
@@ -1460,12 +1461,13 @@ CRITICAL DISTRIBUTION REQUIREMENTS:
    - All options must be scientifically valid statements
    - Make students think carefully between 2-3 close options
 
-5. EXPLANATIONS:
-   - Start with "According to NCERT [Chapter Name]..."
-   - Quote relevant NCERT text supporting the answer
-   - Explain why the correct option is right
-   - Explain why each distractor is wrong
-   - Keep explanations clear and concise
+6. EXPLANATION REQUIREMENTS:
+   - Start with NCERT reference: "According to [Chapter Name]..."
+   - Quote exact relevant lines from NCERT that support the correct answer
+   - Explain clearly WHY the correct answer is right
+   - Explain WHY each distractor is incorrect with specific reasoning
+   - Connect explanation back to the chapter's key concepts
+   - Keep explanations comprehensive but concise (4-6 sentences)
 
 FORMAT YOUR RESPONSE AS VALID JSON ONLY:
 {{
