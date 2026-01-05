@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from otp_utils import generate_otp, hash_otp, send_otp_email
 from datetime import datetime, timedelta
 from sqlalchemy import and_, or_, func, desc
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from dotenv import load_dotenv
 import os
 import json
@@ -15,6 +15,7 @@ import bcrypt
 import models, schemas, crud
 import re
 import random
+from rag_service import rag_service
 
 
 load_dotenv()
@@ -271,6 +272,52 @@ def verify_otp(data: dict, db: Session = Depends(get_db)):
     db.commit()
     return {"msg": "OTP verified"}
 
+# Fallback function for when RAG service fails
+async def _fallback_groq_call(prompt_text: str, chapter_id: int, db2: Session) -> str:
+    """Fallback to direct Groq API call when RAG fails"""
+    try:
+        # Build NCERT context from database
+        q = db2.query(models.Ncert)
+        if chapter_id:
+            q = q.filter(models.Ncert.chapter_id == chapter_id)
+        rows = q.limit(12).all()
+        
+        if not rows:
+            rows = db2.query(models.Ncert).limit(20).all()
+        
+        context = "\n\n".join([r.ncert_text for r in rows if r.ncert_text])
+        if len(context) > 15000:
+            context = context[:15000]
+        
+        system_prompt = (
+            "You are an educational assistant specializing in NCERT curriculum content. "
+            "Answer based on the provided context. Be concise and helpful."
+        )
+        user_prompt = f"CONTEXT:\n{context}\n\nQUESTION:\n{prompt_text}"
+        
+        groq_url = os.getenv("GROQ_API_URL", "https://api.groq.com/openai/v1/chat/completions")
+        groq_key = os.getenv("GROQ_API_KEY")
+        
+        if groq_url and groq_key:
+            headers = {"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"}
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                payload = {
+                    "model": "llama-3.3-70b-versatile",
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt}
+                    ]
+                }
+                resp = await client.post(groq_url, json=payload, headers=headers)
+                resp.raise_for_status()
+                j = resp.json()
+                if j.get("choices") and j["choices"][0].get("message"):
+                    return j["choices"][0]["message"]["content"]
+        return "Sorry, I couldn't generate an answer at this time."
+    except Exception as e:
+        print(f"Fallback Groq call failed: {e}")
+        return "Sorry, there was an error getting an answer. Please try again later."
+
 @app.post("/generate")
 async def generate(request: Request, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     """Accept a student's doubt, persist it immediately, and schedule an asynchronous
@@ -304,99 +351,46 @@ async def generate(request: Request, background_tasks: BackgroundTasks, db: Sess
             pass
         raise HTTPException(status_code=500, detail=f"Could not save doubt: {e}")
 
-    # Background worker: resolve the doubt using NCERT context and Groq
+    # Background worker: resolve the doubt using RAG service
     async def _process_doubt(doubt_id: int, prompt_text: str, student_id, chapter_id):
         # make a new DB session for background work
         db2 = SessionLocal()
         try:
-            # Build NCERT context: prefer rows matching chapter_id, else fuzzy search in text
-            q = db2.query(models.Ncert)
+            # Get subject and class info for RAG filtering
+            subject = None
+            class_id = None
+            
             if chapter_id:
-                q = q.filter(models.Ncert.chapter_id == chapter_id)
-            else:
-                keywords = re.findall(r"\b[a-zA-Z]{4,}\b", prompt_text)
-                if keywords:
-                    kw = keywords[:6]
-                    filters = [models.Ncert.ncert_text.like(f"%{k}%") for k in kw]
-                    q = q.filter(or_(*filters))
-            rows = q.limit(12).all()
+                chapter = db2.query(models.Chapter).filter_by(chapter_id=chapter_id).first()
+                if chapter:
+                    subject_obj = db2.query(models.Subject).filter_by(subject_id=chapter.subject_id).first()
+                    subject = subject_obj.subject_name if subject_obj else None
+            
+            if student_id:
+                student = db2.query(models.Student).filter_by(student_id=student_id).first()
+                class_id = student.class_id if student else None
 
-            if not rows:
-                rows = db2.query(models.Ncert).limit(20).all()
-
-            context = "\n\n".join([r.ncert_text for r in rows if r.ncert_text])
-            if len(context) > 15000:
-                context = context[:15000]
-
-            system_prompt = (
-    "You are an educational assistant specializing in NCERT curriculum content. Your primary role is to help students learn directly from their textbooks.\n\n"
-    "RESPONSE GUIDELINES:\n\n"
-    "1. GREETINGS & GENERAL CONVERSATION:\n"
-    "   - Respond naturally to greetings (hi, hello, how are you, good morning, etc.)\n"
-    "   - Handle common courtesy exchanges warmly and briefly\n"
-    "   - Answer general common-sense questions politely\n\n"
-    "2. NCERT CONTENT QUESTIONS (STRICT MODE):\n"
-    "   - ALWAYS answer ONLY from the provided NCERT context for chapter-related questions\n"
-    "   - Use EXACT lines and phrases from the context whenever possible\n"
-    "   - Quote or paraphrase directly from the textbook content\n"
-    "   - Do NOT add external information to NCERT-based answers\n"
-    "   - Stay faithful to the textbook's explanations, definitions, and examples\n"
-    "   - Maintain the same terminology and explanation style as the NCERT text\n\n"
-    "3. WHEN CONTEXT IS NOT SUFFICIENT:\n"
-    "   - If the question is educational but not covered in the provided context, respond with:\n"
-    "     'This is not part of the current chapter content. However, as part of general knowledge: [provide answer]'\n"
-    "   - Clearly distinguish between NCERT content and general knowledge\n"
-    "   - For follow-up questions beyond the chapter scope, use the same disclaimer\n\n"
-    "4. STYLE:\n"
-    "   - Be concise and precise\n"
-    "   - For NCERT answers: use exact textbook terminology\n"
-    "   - For general knowledge: keep it simple and student-friendly\n"
-    "   - Be helpful and supportive throughout\n\n"
-    "PRIORITY: Always check the context first. If the answer is in the NCERT context, use ONLY that. If not, clearly state it's general knowledge before answering."
-)
-            user_prompt = f"CONTEXT:\n{context}\n\nQUESTION:\n{prompt_text}"
-
-            groq_url = os.getenv("GROQ_API_URL", "https://api.groq.com/openai/v1/chat/completions")
-            groq_key = os.getenv("GROQ_API_KEY")
-
-            answer_text = None
-
+            # Use RAG service for semantic search and answer generation
             try:
-                if groq_url and groq_key:
-                    headers = {"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"}
-                    async with httpx.AsyncClient(timeout=60.0) as client:
-                        payload = {
-                            "model": "llama-3.3-70b-versatile",
-                            "messages": [
-                                {"role": "system", "content": system_prompt},
-                                {"role": "user", "content": user_prompt}
-                            ]
-                        }
-                        resp = await client.post(groq_url, json=payload, headers=headers)
-                        resp.raise_for_status()
-                        j = resp.json()
-                        answer = None
-                        if isinstance(j, dict):
-                            answer = j.get("text") or j.get("output") or j.get("result") or j.get("answer")
-                            if isinstance(answer, list) and answer:
-                                first = answer[0]
-                                if isinstance(first, dict) and first.get("text"):
-                                    answer = first.get("text")
-                            elif j.get("choices") and isinstance(j["choices"], list) and j["choices"]:
-                                message = j["choices"][0].get("message")
-                                if message and isinstance(message, dict) and message.get("content"):
-                                    answer = message["content"]
-                        if not answer:
-                            print(f"Could not parse answer from Groq response: {j}")
-                            answer_text = "Sorry, the AI returned an unexpected response format."
-                        else:
-                            answer_text = str(answer)
+                rag_result = await rag_service.clear_doubt(
+                    question=prompt_text,
+                    subject=subject,
+                    class_id=class_id,
+                    chapter_id=chapter_id,
+                    student_context=f"Chapter ID: {chapter_id}" if chapter_id else None
+                )
+
+                if rag_result.get("success"):
+                    answer_text = rag_result.get("answer", "")
+                    print(f"✅ RAG answer generated for doubt {doubt_id} (sources: {len(rag_result.get('sources', []))})")
+                else:
+                    answer_text = rag_result.get("answer", "Sorry, I couldn't generate an answer at this time.")
+                    print(f"⚠️ RAG failed for doubt {doubt_id}: {rag_result.get('error', 'Unknown error')}")
 
             except Exception as e:
-                if isinstance(e, httpx.HTTPStatusError):
-                    print(f"Groq API response error: {e.response.status_code} - {e.response.text}")
-                print(f"Error in background Groq call for doubt {doubt_id}: {e}")
-                answer_text = f"Sorry, there was an error getting an answer from the AI assistant. Please try again later."
+                print(f"❌ RAG service error for doubt {doubt_id}: {e}")
+                # Fallback to direct Groq call if RAG fails
+                answer_text = await _fallback_groq_call(prompt_text, chapter_id, db2)
 
             try:
                 resp_row = models.Response(
@@ -562,7 +556,7 @@ def update_student(student_id: int, data: dict, db: Session = Depends(get_db)):
 
 @app.post("/generate_quiz")
 async def generate_quiz(request: Request, db: Session = Depends(get_db)):
-    """Generate NEET-pattern quiz questions using NCERT context + Groq AI"""
+    """Generate NEET-pattern quiz questions using RAG (semantic search + LLM)"""
     try:
         body = await request.json()
         chapter_id = body.get("chapter_id")
@@ -571,6 +565,55 @@ async def generate_quiz(request: Request, db: Session = Depends(get_db)):
         if not chapter_id:
             raise HTTPException(status_code=400, detail="chapter_id is required")
         
+        # Get chapter details for RAG filtering
+        chapter = db.query(models.Chapter).filter_by(chapter_id=chapter_id).first()
+        if not chapter:
+            raise HTTPException(status_code=404, detail="Chapter not found")
+        
+        subject_obj = db.query(models.Subject).filter_by(subject_id=chapter.subject_id).first()
+        subject = subject_obj.subject_name if subject_obj else None
+        topic = chapter.chapter_name
+        
+        # Try RAG service first
+        try:
+            rag_result = await rag_service.generate_quiz(
+                topic=topic,
+                subject=subject,
+                class_id=None,
+                num_questions=num_questions,
+                difficulty="medium"
+            )
+            
+            if rag_result.get("success") and rag_result.get("questions"):
+                questions = rag_result.get("questions", [])
+                formatted_quiz = []
+                for q in questions[:num_questions]:
+                    opts = q.get("options", {})
+                    if isinstance(opts, dict):
+                        opts_list = [opts.get("A", ""), opts.get("B", ""), opts.get("C", ""), opts.get("D", "")]
+                    else:
+                        opts_list = list(opts)[:4] if opts else []
+                    while len(opts_list) < 4:
+                        opts_list.append("")
+                    
+                    formatted_quiz.append({
+                        "question": q.get("question", "").strip(),
+                        "options": opts_list,
+                        "correct_answer": q.get("correct_answer", "A"),
+                        "explanation": q.get("explanation", ""),
+                        "chapter_name": topic
+                    })
+                
+                print(f"✅ RAG quiz generated: {len(formatted_quiz)} questions for {topic}")
+                return {
+                    "quiz": formatted_quiz,
+                    "topic": topic,
+                    "total_questions": len(formatted_quiz)
+                }
+        except Exception as rag_error:
+            print(f"⚠️ RAG quiz generation failed, falling back to direct Groq: {rag_error}")
+        
+        # Fallback to direct NCERT context + Groq
         q = db.query(models.Ncert).filter(models.Ncert.chapter_id == chapter_id)
         rows = q.limit(40).all()
         
@@ -581,7 +624,6 @@ async def generate_quiz(request: Request, db: Session = Depends(get_db)):
         if len(context) > 20000:
             context = context[:20000]
         
-        chapter = db.query(models.Chapter).filter_by(chapter_id=chapter_id).first()
         chapter_name = chapter.chapter_name if chapter else f"Chapter {chapter_id}"
         
         groq_url = os.getenv("GROQ_API_URL")
