@@ -6,7 +6,6 @@ Handles document embeddings storage and retrieval for RAG on Aiven cloud
 import psycopg
 from psycopg.rows import dict_row
 from pgvector.psycopg import register_vector
-from sentence_transformers import SentenceTransformer
 from typing import List, Dict, Any, Optional
 import os
 from dotenv import load_dotenv
@@ -17,7 +16,7 @@ load_dotenv()
 
 class VectorDB:
     def __init__(self):
-        """Initialize PostgreSQL connection and embedding model"""
+        """Initialize PostgreSQL connection (lazy load embedding model)"""
         # Get vector database connection details from environment
         self.db_host = os.getenv("VECTOR_DB_HOST")
         self.db_port = os.getenv("VECTOR_DB_PORT", "5432")
@@ -25,8 +24,8 @@ class VectorDB:
         self.db_password = os.getenv("VECTOR_DB_PASSWORD")
         self.db_name = os.getenv("VECTOR_DB_NAME", "defaultdb")
         
-        # Initialize embedding model (384-dimensional embeddings)
-        self.embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
+        # Lazy load embedding model (only when needed to save memory)
+        self._embedding_model = None
         self.embedding_dimension = 384
         
         # Initialize connection (may be None if not configured)
@@ -46,6 +45,16 @@ class VectorDB:
         else:
             print("⚠️  No vector database configured - RAG features disabled")
             print("   Set VECTOR_DB_HOST, VECTOR_DB_USER, VECTOR_DB_PASSWORD in .env to enable")
+    
+    @property
+    def embedding_model(self):
+        """Lazy load the embedding model only when first needed"""
+        if self._embedding_model is None:
+            print("🔄 Loading embedding model (first use)...")
+            from sentence_transformers import SentenceTransformer
+            self._embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
+            print("✅ Embedding model loaded")
+        return self._embedding_model
     
     def _connect(self):
         """Establish database connection"""
