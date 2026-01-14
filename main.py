@@ -15,7 +15,6 @@ import bcrypt
 import models, schemas, crud
 import re
 import random
-from rag_service import rag_service
 
 
 load_dotenv()
@@ -272,9 +271,9 @@ def verify_otp(data: dict, db: Session = Depends(get_db)):
     db.commit()
     return {"msg": "OTP verified"}
 
-# Fallback function for when RAG service fails
-async def _fallback_groq_call(prompt_text: str, chapter_id: int, db2: Session) -> str:
-    """Fallback to direct Groq API call when RAG fails"""
+# Main function for doubt resolution using NCERT content + Groq
+async def _groq_call(prompt_text: str, chapter_id: int, db2: Session) -> str:
+    """Generate answer using NCERT content + Groq API"""
     try:
         # Build NCERT context from database
         q = db2.query(models.Ncert)
@@ -315,7 +314,7 @@ async def _fallback_groq_call(prompt_text: str, chapter_id: int, db2: Session) -
                     return j["choices"][0]["message"]["content"]
         return "Sorry, I couldn't generate an answer at this time."
     except Exception as e:
-        print(f"Fallback Groq call failed: {e}")
+        print(f"Groq call failed: {e}")
         return "Sorry, there was an error getting an answer. Please try again later."
 
 @app.post("/generate")
@@ -351,46 +350,13 @@ async def generate(request: Request, background_tasks: BackgroundTasks, db: Sess
             pass
         raise HTTPException(status_code=500, detail=f"Could not save doubt: {e}")
 
-    # Background worker: resolve the doubt using RAG service
+    # Background worker: resolve the doubt using NCERT + Groq
     async def _process_doubt(doubt_id: int, prompt_text: str, student_id, chapter_id):
         # make a new DB session for background work
         db2 = SessionLocal()
         try:
-            # Get subject and class info for RAG filtering
-            subject = None
-            class_id = None
-            
-            if chapter_id:
-                chapter = db2.query(models.Chapter).filter_by(chapter_id=chapter_id).first()
-                if chapter:
-                    subject_obj = db2.query(models.Subject).filter_by(subject_id=chapter.subject_id).first()
-                    subject = subject_obj.subject_name if subject_obj else None
-            
-            if student_id:
-                student = db2.query(models.Student).filter_by(student_id=student_id).first()
-                class_id = student.class_id if student else None
-
-            # Use RAG service for semantic search and answer generation
-            try:
-                rag_result = await rag_service.clear_doubt(
-                    question=prompt_text,
-                    subject=subject,
-                    class_id=class_id,
-                    chapter_id=chapter_id,
-                    student_context=f"Chapter ID: {chapter_id}" if chapter_id else None
-                )
-
-                if rag_result.get("success"):
-                    answer_text = rag_result.get("answer", "")
-                    print(f"✅ RAG answer generated for doubt {doubt_id} (sources: {len(rag_result.get('sources', []))})")
-                else:
-                    answer_text = rag_result.get("answer", "Sorry, I couldn't generate an answer at this time.")
-                    print(f"⚠️ RAG failed for doubt {doubt_id}: {rag_result.get('error', 'Unknown error')}")
-
-            except Exception as e:
-                print(f"❌ RAG service error for doubt {doubt_id}: {e}")
-                # Fallback to direct Groq call if RAG fails
-                answer_text = await _fallback_groq_call(prompt_text, chapter_id, db2)
+            # Use direct NCERT context + Groq call
+            answer_text = await _groq_call(prompt_text, chapter_id, db2)
 
             try:
                 resp_row = models.Response(
@@ -556,7 +522,7 @@ def update_student(student_id: int, data: dict, db: Session = Depends(get_db)):
 
 @app.post("/generate_quiz")
 async def generate_quiz(request: Request, db: Session = Depends(get_db)):
-    """Generate NEET-pattern quiz questions using RAG (semantic search + LLM)"""
+    """Generate NEET-pattern quiz questions using NCERT content + Groq"""
     try:
         body = await request.json()
         chapter_id = body.get("chapter_id")
@@ -565,55 +531,14 @@ async def generate_quiz(request: Request, db: Session = Depends(get_db)):
         if not chapter_id:
             raise HTTPException(status_code=400, detail="chapter_id is required")
         
-        # Get chapter details for RAG filtering
+        # Get chapter details
         chapter = db.query(models.Chapter).filter_by(chapter_id=chapter_id).first()
         if not chapter:
             raise HTTPException(status_code=404, detail="Chapter not found")
         
-        subject_obj = db.query(models.Subject).filter_by(subject_id=chapter.subject_id).first()
-        subject = subject_obj.subject_name if subject_obj else None
         topic = chapter.chapter_name
         
-        # Try RAG service first
-        try:
-            rag_result = await rag_service.generate_quiz(
-                topic=topic,
-                subject=subject,
-                class_id=None,
-                num_questions=num_questions,
-                difficulty="medium"
-            )
-            
-            if rag_result.get("success") and rag_result.get("questions"):
-                questions = rag_result.get("questions", [])
-                formatted_quiz = []
-                for q in questions[:num_questions]:
-                    opts = q.get("options", {})
-                    if isinstance(opts, dict):
-                        opts_list = [opts.get("A", ""), opts.get("B", ""), opts.get("C", ""), opts.get("D", "")]
-                    else:
-                        opts_list = list(opts)[:4] if opts else []
-                    while len(opts_list) < 4:
-                        opts_list.append("")
-                    
-                    formatted_quiz.append({
-                        "question": q.get("question", "").strip(),
-                        "options": opts_list,
-                        "correct_answer": q.get("correct_answer", "A"),
-                        "explanation": q.get("explanation", ""),
-                        "chapter_name": topic
-                    })
-                
-                print(f"✅ RAG quiz generated: {len(formatted_quiz)} questions for {topic}")
-                return {
-                    "quiz": formatted_quiz,
-                    "topic": topic,
-                    "total_questions": len(formatted_quiz)
-                }
-        except Exception as rag_error:
-            print(f"⚠️ RAG quiz generation failed, falling back to direct Groq: {rag_error}")
-        
-        # Fallback to direct NCERT context + Groq
+        # Get NCERT content for this chapter
         q = db.query(models.Ncert).filter(models.Ncert.chapter_id == chapter_id)
         rows = q.limit(40).all()
         

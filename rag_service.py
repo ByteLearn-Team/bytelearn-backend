@@ -5,7 +5,6 @@ Handles document retrieval and LLM integration
 
 from typing import List, Dict, Any, Optional
 import os
-from openai import OpenAI
 from dotenv import load_dotenv
 from vector_db import vector_db
 import json
@@ -17,9 +16,23 @@ class RAGService:
     def __init__(self):
         """Initialize RAG service with Groq (OpenAI-compatible API)"""
         self.api_key = os.getenv("OPENAI_API_KEY")
-        base_url = os.getenv("OPENAI_BASE_URL", "https://api.groq.com/openai/v1")
+        self.base_url = os.getenv("OPENAI_BASE_URL", "https://api.groq.com/openai/v1")
         self.model = os.getenv("OPENAI_MODEL", "llama-3.3-70b-versatile")
-        self.client = OpenAI(api_key=self.api_key, base_url=base_url)
+        
+        # Only initialize client if API key is available
+        self.client = None
+        self.enabled = False
+        
+        if self.api_key:
+            try:
+                from openai import OpenAI
+                self.client = OpenAI(api_key=self.api_key, base_url=self.base_url)
+                self.enabled = True
+                print("✅ RAG service initialized successfully")
+            except Exception as e:
+                print(f"⚠️  Could not initialize RAG service: {e}")
+        else:
+            print("⚠️  RAG service disabled - OPENAI_API_KEY not set")
 
     def get_relevant_context(
         self,
